@@ -249,6 +249,7 @@ class userstatsadvanced_form extends moodleform {
             ),
             'intentos_cuestionario' => $this->get_localized_label('userstatsadvanced_intentos_cuestionario', 'Intentos de cuestionario (completados / total)'),
             'contenidos_visualizados' => $this->get_localized_label('userstatsadvanced_contenidos_visualizados', 'Contenidos visualizados (progreso global)'),
+            'recursos_completados' => $this->get_localized_label('userstatsadvanced_recursos_completados', 'Recursos completados / Total'),
             'finalizacion_cruzada' => $this->get_localized_label('userstatsadvanced_finalizacion_cruzada', 'Finalización cruzada (progreso global)'),
             'correos' => $this->get_localized_label('userstatsadvanced_correos', 'Correos (interacción con docentes)'),
             'mensajes_tutor' => $this->get_localized_label('userstatsadvanced_mensajes_tutor', 'Mensajes al tutor'),
@@ -384,6 +385,10 @@ class userstatsadvanced_form extends moodleform {
             'userstatsadvanced_elements_filter_default_tasks',
             'Acceso al curso y tareas'
         );
+        $defaultselectedcompletedresourcestext = $this->get_localized_label(
+            'userstatsadvanced_elements_filter_default_completed_resources',
+            'Se usarán todos los recursos completados del curso.'
+        );
         $selectedcounttemplate = $this->get_localized_label(
             'userstatsadvanced_selected_items_count',
             'Elementos seleccionados: {$a}'
@@ -411,6 +416,10 @@ class userstatsadvanced_form extends moodleform {
             'userstatsadvanced_select_tasks_help',
             'Si no seleccionas tareas, se usarán todas las tareas visibles del curso.'
         );
+        $defaultcompletedresourceshelptext = $this->get_localized_label(
+            'userstatsadvanced_select_completed_resources_help',
+            'Si no seleccionas elementos, se usarán todos los recursos completados del curso.'
+        );
         $selectresourceslabel = $this->get_localized_label(
             'userstatsadvanced_select_course_modules',
             'Seleccionar actividades/recursos'
@@ -427,12 +436,14 @@ class userstatsadvanced_form extends moodleform {
         $defaultselectedtextjson = json_encode($defaultselectedtext);
         $defaultselectedquiztextjson = json_encode($defaultselectedquiztext);
         $defaultselectedtaskstextjson = json_encode($defaultselectedtaskstext);
+        $defaultselectedcompletedresourcestextjson = json_encode($defaultselectedcompletedresourcestext);
         $selectedcounttemplatejson = json_encode($selectedcounttemplate);
         $selectedquizcounttemplatejson = json_encode($selectedquizcounttemplate);
         $selectedtaskscounttemplatejson = json_encode($selectedtaskscounttemplate);
         $defaulthelptextjson = json_encode($defaulthelptext);
         $defaultquizhelptextjson = json_encode($defaultquizhelptext);
         $defaulttaskshelptextjson = json_encode($defaulttaskshelptext);
+        $defaultcompletedresourceshelptextjson = json_encode($defaultcompletedresourceshelptext);
         $selectresourceslabeljson = json_encode($selectresourceslabel);
         $selectquizzeslabeljson = json_encode($selectquizzeslabel);
         $selecttaskslabeljson = json_encode($selecttaskslabel);
@@ -442,12 +453,14 @@ class userstatsadvanced_form extends moodleform {
     var defaultText = $defaultselectedtextjson;
     var defaultQuizText = $defaultselectedquiztextjson;
     var defaultTasksText = $defaultselectedtaskstextjson;
+    var defaultCompletedResourcesText = $defaultselectedcompletedresourcestextjson;
     var selectedTemplate = $selectedcounttemplatejson;
     var selectedQuizTemplate = $selectedquizcounttemplatejson;
     var selectedTasksTemplate = $selectedtaskscounttemplatejson;
     var defaultHelpText = $defaulthelptextjson;
     var defaultQuizHelpText = $defaultquizhelptextjson;
     var defaultTasksHelpText = $defaulttaskshelptextjson;
+    var defaultCompletedResourcesHelpText = $defaultcompletedresourceshelptextjson;
     var selectResourcesLabel = $selectresourceslabeljson;
     var selectQuizzesLabel = $selectquizzeslabeljson;
     var selectTasksLabel = $selecttaskslabeljson;
@@ -480,7 +493,12 @@ class userstatsadvanced_form extends moodleform {
     function toggleFormRows() {
         var statType = getCurrentStatType();
         var showAdvancedFields = (statType === "evaluaciones" || statType === "actividades_aprendizaje");
-        var showSelectionFields = (statType === "evaluaciones" || statType === "actividades_aprendizaje" || statType === "contenidos_visualizados");
+        var showSelectionFields = (
+            statType === "evaluaciones" ||
+            statType === "actividades_aprendizaje" ||
+            statType === "contenidos_visualizados" ||
+            statType === "recursos_completados"
+        );
 
         var maxRow = document.getElementById("fitem_id_maxdisplayvalue");
         var formatRow = document.getElementById("fitem_id_displayformat");
@@ -544,6 +562,8 @@ class userstatsadvanced_form extends moodleform {
                 helpLabel.textContent = defaultQuizHelpText;
             } else if (statType === "actividades_aprendizaje") {
                 helpLabel.textContent = defaultTasksHelpText;
+            } else if (statType === "recursos_completados") {
+                helpLabel.textContent = defaultCompletedResourcesHelpText;
             } else {
                 helpLabel.textContent = defaultHelpText;
             }
@@ -575,6 +595,12 @@ class userstatsadvanced_form extends moodleform {
             } else {
                 label.textContent = selectedTasksTemplate.replace("__COUNT__", String(total));
             }
+        } else if (statType === "recursos_completados") {
+            if (total <= 0) {
+                label.textContent = defaultCompletedResourcesText;
+            } else {
+                label.textContent = selectedTemplate.replace("__COUNT__", String(total));
+            }
         } else {
             if (total <= 0) {
                 label.textContent = defaultText;
@@ -588,6 +614,11 @@ class userstatsadvanced_form extends moodleform {
         var hidden = document.getElementById("id_selectedcmids");
         if (hidden) {
             hidden.value = csv || "";
+        }
+        var normalizedCsv = (csv || "").trim();
+        if (normalizedCsv === "") {
+            refreshLabel("");
+            return;
         }
         refreshLabel(labelText || "");
     };
@@ -632,7 +663,7 @@ JS;
         );
         $mform->addHelpButton('sessionlimittime', 'sessionlimittime', 'block_configurable_reports');
         $mform->setType('sessionlimittime', PARAM_INT);
-        $mform->setDefault('sessionlimittime', 30 * 60);
+        $mform->setDefault('sessionlimittime', 4 * 60 * 60);
         $mform->disabledIf('sessionlimittime', 'stat_type', 'neq', 'tiempo_total');
 
         $this->_customdata['compclass']->add_form_elements($mform, $this);

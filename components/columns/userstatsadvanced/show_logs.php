@@ -26,8 +26,8 @@ require_once($CFG->dirroot . '/blocks/configurable_reports/components/columns/us
 
 $courseid = required_param('courseid', PARAM_INT);
 $userid = required_param('userid', PARAM_INT);
-$sessionlimit = optional_param('sessionlimit', 30 * 60, PARAM_INT);
-$sessionlimit = ($sessionlimit > 0) ? $sessionlimit : (30 * 60);
+$sessionlimit = optional_param('sessionlimit', 4 * 60 * 60, PARAM_INT);
+$sessionlimit = ($sessionlimit > 0) ? $sessionlimit : (4 * 60 * 60);
 $starttime = optional_param('starttime', 0, PARAM_INT);
 $endtime = optional_param('endtime', 0, PARAM_INT);
 $reportid = optional_param('reportid', 0, PARAM_INT);
@@ -35,9 +35,12 @@ $showdetails = optional_param('details', 0, PARAM_BOOL);
 $legacydaily = optional_param('daily', 0, PARAM_BOOL);
 $showdetails = !empty($showdetails) || !empty($legacydaily);
 $download = optional_param('download', 0, PARAM_BOOL);
+$accessscope = optional_param('filter_accessscope', 'courseplatform', PARAM_ALPHA);
+$accessscope = userstatsadvanced_show_logs_normalize_access_scope($accessscope);
 
 $course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
 $targetuser = $DB->get_record('user', ['id' => $userid], '*', MUST_EXIST);
+[$starttime, $endtime] = userstatsadvanced_show_logs_resolve_effective_time_range($courseid, $userid, $starttime, $endtime);
 if (!empty($targetuser->deleted)) {
     throw new moodle_exception('invaliduser');
 }
@@ -64,6 +67,7 @@ if ($reportid > 0) {
 if ($showdetails) {
     $url->param('details', 1);
 }
+$url->param('filter_accessscope', $accessscope);
 $title = $showdetails ? 'Días distintos de conexión' : 'Registros diarios';
 
 $PAGE->set_context($context);
@@ -83,7 +87,7 @@ $formatduration = static function(int $totalseconds): string {
 $userstatsadvancedplugin = new plugin_userstatsadvanced((object)['id' => 0]);
 
 if ($showdetails) {
-    $detaillogs = userstatsadvanced_show_logs_get_detail_logs($userid, $courseid, $starttime, $endtime);
+    $detaillogs = userstatsadvanced_show_logs_get_detail_logs($userid, $courseid, $starttime, $endtime, $accessscope);
     $detailrows = userstatsadvanced_show_logs_build_detail_rows(
         $detaillogs,
         $targetuser,
@@ -92,7 +96,7 @@ if ($showdetails) {
     );
 
     if ($download) {
-        userstatsadvanced_show_logs_download_detail_rows($detailrows, $targetuser);
+        userstatsadvanced_show_logs_download_detail_rows($detailrows, $targetuser, $accessscope);
     }
 
     $table = new html_table();
@@ -120,6 +124,10 @@ if ($showdetails) {
         'text-center mb-2'
     );
     echo html_writer::div('Usuario: ' . fullname($targetuser), 'mb-3');
+    echo html_writer::div(
+        'Alcance: ' . (($accessscope === 'courseplatform') ? 'Curso + plataforma' : 'Solo curso'),
+        'mb-2'
+    );
 
     if (empty($table->data)) {
         echo $OUTPUT->notification(get_string('norecordsfound', 'block_configurable_reports'));
@@ -136,7 +144,8 @@ $totalsbyday = $userstatsadvancedplugin->get_time_tracking_daily_connection_tota
     $courseid,
     $starttime,
     $endtime,
-    $sessionlimit
+    $sessionlimit,
+    $accessscope
 );
 $totalaccumulated = 0;
 foreach ($totalsbyday as $totalseconds) {
@@ -161,6 +170,10 @@ foreach ($totalsbyday as $daybucket => $totalseconds) {
 echo $OUTPUT->header();
 echo $OUTPUT->heading($title);
 echo html_writer::div('Usuario: ' . fullname($targetuser), 'mb-3');
+echo html_writer::div(
+    'Alcance: ' . (($accessscope === 'courseplatform') ? 'Curso + plataforma' : 'Solo curso'),
+    'mb-2'
+);
 echo html_writer::div('Tiempo acumulado (alineado): ' . $formatduration($totalaccumulated), 'mb-2');
 $detailsurl = new moodle_url($url);
 $detailsurl->param('details', 1);
@@ -182,21 +195,184 @@ echo html_writer::end_div();
 echo $OUTPUT->footer();
 
 /**
+ * Normalizes access scope parameter.
+ *
+ * @param string $scope
+ * @return string
+ */
+function userstatsadvanced_show_logs_normalize_access_scope(string $scope): string {
+    return ($scope === 'courseonly') ? 'courseonly' : 'courseplatform';
+}
+
+/**
+ * Resolves effective time range from request selectors or course academic period.
+ *
+ * @param int $courseid
+ * @param int $userid
+ * @param int $starttime
+ * @param int $endtime
+ * @return array{0:int,1:int}
+ */
+function userstatsadvanced_show_logs_resolve_effective_time_range(
+    int $courseid,
+    int $userid,
+    int $starttime = 0,
+    int $endtime = 0
+): array {
+    global $DB;
+
+    $filterstarttime = optional_param_array('filter_starttime', [], PARAM_RAW);
+    $filterendtime = optional_param_array('filter_endtime', [], PARAM_RAW);
+
+    if (!empty($filterstarttime) && isset($filterstarttime['year'], $filterstarttime['month'], $filterstarttime['day'])) {
+        $starttime = make_timestamp(
+            (int)$filterstarttime['year'],
+            (int)$filterstarttime['month'],
+            (int)$filterstarttime['day'],
+            isset($filterstarttime['hour']) ? (int)$filterstarttime['hour'] : 0,
+            isset($filterstarttime['minute']) ? (int)$filterstarttime['minute'] : 0
+        );
+    }
+
+    if (!empty($filterendtime) && isset($filterendtime['year'], $filterendtime['month'], $filterendtime['day'])) {
+        $endtime = make_timestamp(
+            (int)$filterendtime['year'],
+            (int)$filterendtime['month'],
+            (int)$filterendtime['day'],
+            isset($filterendtime['hour']) ? (int)$filterendtime['hour'] : 0,
+            isset($filterendtime['minute']) ? (int)$filterendtime['minute'] : 0
+        );
+    }
+
+    if ($starttime <= 0 || $endtime <= 0 || $endtime < $starttime) {
+        $course = $DB->get_record('course', ['id' => $courseid], 'id,startdate,enddate', IGNORE_MISSING);
+        if ($course) {
+            if ($starttime <= 0 && !empty($course->startdate)) {
+                $starttime = (int)$course->startdate;
+            }
+            if ($endtime <= 0 && !empty($course->enddate)) {
+                $endtime = (int)$course->enddate;
+            }
+        }
+    }
+
+    if ($starttime < 0) {
+        $starttime = 0;
+    }
+    if ($endtime <= 0) {
+        $endtime = 2145938400;
+    }
+    [$enrolstarttime, $enrolendtime] = userstatsadvanced_show_logs_get_user_enrolment_time_range($userid, $courseid);
+    if ($enrolstarttime > 0) {
+        $starttime = ($starttime > 0) ? max($starttime, $enrolstarttime) : $enrolstarttime;
+    }
+    if ($enrolendtime > 0) {
+        $endtime = ($endtime > 0) ? min($endtime, $enrolendtime) : $enrolendtime;
+    }
+    if ($endtime < $starttime) {
+        $endtime = $starttime;
+    }
+
+    return [$starttime, $endtime];
+}
+
+/**
+ * Returns active enrolment start/end range for the user in a course.
+ *
+ * @param int $userid
+ * @param int $courseid
+ * @return array{0:int,1:int}
+ */
+function userstatsadvanced_show_logs_get_user_enrolment_time_range(int $userid, int $courseid): array {
+    global $DB;
+
+    if ($userid <= 0 || $courseid <= 0) {
+        return [0, 0];
+    }
+
+    $sql = "SELECT MIN(CASE WHEN ue.timestart > 0 THEN ue.timestart ELSE NULL END) AS mintimestart,
+                   MAX(CASE WHEN ue.timeend > 0 THEN ue.timeend ELSE NULL END) AS maxtimeend
+              FROM {user_enrolments} ue
+              JOIN {enrol} e
+                ON e.id = ue.enrolid
+             WHERE ue.userid = :userid
+               AND e.courseid = :courseid
+               AND ue.status = 0
+               AND e.status = 0";
+    $record = $DB->get_record_sql($sql, [
+        'userid' => $userid,
+        'courseid' => $courseid,
+    ]);
+    if (!$record) {
+        return [0, 0];
+    }
+
+    $mintimestart = !empty($record->mintimestart) ? (int)$record->mintimestart : 0;
+    $maxtimeend = !empty($record->maxtimeend) ? (int)$record->maxtimeend : 0;
+
+    return [$mintimestart, $maxtimeend];
+}
+
+/**
+ * Returns SQL condition for selected scope in log queries.
+ *
+ * @param array $params
+ * @param int $courseid
+ * @param string $scope
+ * @param string $field
+ * @param string|null $eventnamefield
+ * @return string
+ */
+function userstatsadvanced_show_logs_get_scope_where_sql(
+    array &$params,
+    int $courseid,
+    string $scope,
+    string $field,
+    ?string $eventnamefield = null
+): string {
+    $params['courseid'] = $courseid;
+    if ($scope === 'courseplatform') {
+        $params['platformcourseid'] = 0;
+        if (!empty($eventnamefield)) {
+            $params['platformeventloggedin'] = '\\core\\event\\user_loggedin';
+            $params['platformeventloggedout'] = '\\core\\event\\user_loggedout';
+            return "(
+                {$field} = :courseid
+                OR
+                (
+                    {$field} = :platformcourseid
+                    AND (
+                        {$eventnamefield} = :platformeventloggedin
+                        OR {$eventnamefield} = :platformeventloggedout
+                    )
+                )
+            )";
+        }
+        return "({$field} = :courseid OR {$field} = :platformcourseid)";
+    }
+
+    return "{$field} = :courseid";
+}
+
+/**
  * Returns detail logs for the selected user and course.
  *
  * @param int $userid
  * @param int $courseid
  * @param int $starttime
  * @param int $endtime
+ * @param string $scope
  * @return array
  */
 function userstatsadvanced_show_logs_get_detail_logs(
     int $userid,
     int $courseid,
     int $starttime = 0,
-    int $endtime = 0
+    int $endtime = 0,
+    string $scope = 'courseplatform'
 ): array {
     global $DB, $CFG;
+    $scope = userstatsadvanced_show_logs_normalize_access_scope($scope);
 
     if (!function_exists('cr_logging_info')) {
         require_once($CFG->dirroot . '/blocks/configurable_reports/locallib.php');
@@ -205,11 +381,11 @@ function userstatsadvanced_show_logs_get_detail_logs(
     [$uselegacyreader, $useinternalreader, $logtable] = cr_logging_info();
     $params = [
         'userid' => $userid,
-        'courseid' => $courseid,
     ];
 
     if ($uselegacyreader) {
-        $where = 'l.userid = :userid AND l.course = :courseid';
+        $where = 'l.userid = :userid AND ' .
+            userstatsadvanced_show_logs_get_scope_where_sql($params, $courseid, $scope, 'l.course');
         if ($starttime > 0) {
             $where .= ' AND l.time >= :starttime';
             $params['starttime'] = $starttime;
@@ -234,7 +410,8 @@ function userstatsadvanced_show_logs_get_detail_logs(
     }
 
     if ($useinternalreader && $logtable !== '') {
-        $where = 'l.userid = :userid AND l.courseid = :courseid';
+        $where = 'l.userid = :userid AND ' .
+            userstatsadvanced_show_logs_get_scope_where_sql($params, $courseid, $scope, 'l.courseid', 'l.eventname');
         if ($starttime > 0) {
             $where .= ' AND l.timecreated >= :starttime';
             $params['starttime'] = $starttime;
@@ -284,7 +461,7 @@ function userstatsadvanced_show_logs_build_detail_rows(
     $rows = [];
     $previousdaybucket = null;
     $previouslogtime = null;
-    $sessionlimit = ($sessionlimit > 0) ? $sessionlimit : (30 * 60);
+    $sessionlimit = ($sessionlimit > 0) ? $sessionlimit : (4 * 60 * 60);
     $number = 1;
 
     foreach ($logs as $log) {
@@ -294,7 +471,7 @@ function userstatsadvanced_show_logs_build_detail_rows(
 
         if ($previousdaybucket !== null && $daybucket === $previousdaybucket && $previouslogtime !== null) {
             $delta = $logtime - $previouslogtime;
-            if ($delta > 0 && $delta <= $sessionlimit) {
+            if ($delta > 0 && $delta <= $sessionlimit && !userstatsadvanced_show_logs_is_login_event($log)) {
                 $seconds = (string)$delta;
             }
         }
@@ -315,6 +492,23 @@ function userstatsadvanced_show_logs_build_detail_rows(
     }
 
     return $rows;
+}
+
+/**
+ * Returns true when the current log row represents a user login event.
+ *
+ * @param object $log
+ * @return bool
+ */
+function userstatsadvanced_show_logs_is_login_event(object $log): bool {
+    $eventname = trim((string)($log->eventname ?? ''));
+    if ($eventname !== '') {
+        return ($eventname === '\\core\\event\\user_loggedin');
+    }
+
+    $module = trim((string)($log->module ?? ''));
+    $action = trim((string)($log->action ?? ''));
+    return ($module === 'user' && $action === 'login');
 }
 
 /**
@@ -477,10 +671,16 @@ function userstatsadvanced_show_logs_build_generic_action_label(object $log): st
  *
  * @param array $detailrows
  * @param object $targetuser
+ * @param string $scope
  * @return void
  */
-function userstatsadvanced_show_logs_download_detail_rows(array $detailrows, object $targetuser): void {
-    $filename = clean_filename('dias_distintos_conexion_' . fullname($targetuser) . '.csv');
+function userstatsadvanced_show_logs_download_detail_rows(
+    array $detailrows,
+    object $targetuser,
+    string $scope = 'courseonly'
+): void {
+    $suffix = ($scope === 'courseplatform') ? '_curso_plataforma' : '';
+    $filename = clean_filename('dias_distintos_conexion_' . fullname($targetuser) . $suffix . '.csv');
 
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $filename . '"');

@@ -32,6 +32,36 @@ require_once($CFG->dirroot . '/blocks/configurable_reports/plugin.class.php');
 class plugin_userstatsadvanced extends plugin_base {
 
     /**
+     * Default max unix timestamp for open-ended reports (2038-01-01).
+     */
+    private const DEFAULT_REPORT_ENDTIME = 2145938400;
+
+    /**
+     * Default session gap limit in seconds (4 hours) to match global report behavior.
+     */
+    private const DEFAULT_SESSION_LIMIT = 4 * 60 * 60;
+
+    /**
+     * Standard Moodle login event name.
+     */
+    private const EVENT_USER_LOGGEDIN = '\\core\\event\\user_loggedin';
+
+    /**
+     * Standard Moodle logout event name.
+     */
+    private const EVENT_USER_LOGGEDOUT = '\\core\\event\\user_loggedout';
+
+    /**
+     * Access scope key for course-only logs.
+     */
+    private const ACCESS_SCOPE_COURSEONLY = 'courseonly';
+
+    /**
+     * Access scope key for course + platform logs.
+     */
+    private const ACCESS_SCOPE_COURSEPLATFORM = 'courseplatform';
+
+    /**
      * Init.
      *
      * @return void
@@ -81,7 +111,7 @@ class plugin_userstatsadvanced extends plugin_base {
      */
     public function execute($data, $row, $user, $courseid, $starttime = 0, $endtime = 0) {
         $stat_type = !empty($data->stat_type) ? (string)$data->stat_type : '';
-        $sessionlimittime = !empty($data->sessionlimittime) ? (int)$data->sessionlimittime : (30 * 60);
+        $sessionlimittime = !empty($data->sessionlimittime) ? (int)$data->sessionlimittime : self::DEFAULT_SESSION_LIMIT;
         $selectedcmidsraw = !empty($data->selectedcmids) ? (string)$data->selectedcmids : '';
         $selectedcmidsraw = $this->resolve_selected_cmids_raw($selectedcmidsraw, $stat_type);
         $displayformat = !empty($data->displayformat) ? (string)$data->displayformat : 'numdenum_percent';
@@ -123,7 +153,7 @@ class plugin_userstatsadvanced extends plugin_base {
         string $stat_type,
         int $starttime = 0,
         int $endtime = 0,
-        int $sessionlimittime = 1800,
+        int $sessionlimittime = self::DEFAULT_SESSION_LIMIT,
         string $selectedcmidsraw = '',
         string $displayformat = 'numdenum_percent',
         int $maxdisplayvalue = 100,
@@ -142,20 +172,24 @@ class plugin_userstatsadvanced extends plugin_base {
         if (!$userid || !$courseid) {
             return $this->get_metric_default_value($stat_type);
         }
+        [$starttime, $endtime] = $this->resolve_effective_time_range($courseid, $starttime, $endtime, $userid);
+        $scope = $this->resolve_access_scope_from_request();
 
         switch ($stat_type) {
             case 'actividades_aprendizaje':
                 $selectedcmids = $this->parse_selected_cmids($selectedcmidsraw);
                 $summary = $this->get_actividades_aprendizaje_completion_summary($userid, $courseid, $selectedcmids);
                 $formattedvalue = $this->format_completion_summary($summary, $displayformat, $maxdisplayvalue);
-                return $this->append_linked_modal_report_button(
-                    $formattedvalue,
-                    $modalreportid,
-                    $courseid,
-                    $userid,
-                    $stat_type,
-                    $selectedcmidsraw
-                );
+                if ($modalreportid <= 0) {
+                    return $formattedvalue;
+                }
+                $showactivitiesurl = $this->build_show_activities_url($courseid, $userid, $selectedcmidsraw);
+                $buttonlabel = $this->get_localized_label('userstatsadvanced_modalreport_open', 'Ver detalle');
+                $showactivitiesbutton = '<a class="btn btn-info btn-sm" href="' . s($showactivitiesurl) .
+                    '" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, ' .
+                    '\'userstatsadvancedactivities\', \'width=1100,height=750,scrollbars=yes,resizable=yes\'); ' .
+                    'return false;">' . s($buttonlabel) . '</a>';
+                return $formattedvalue . '<br>' . $showactivitiesbutton;
 
             case 'tareas_entregadas':
                 return $this->get_completion_fraction_by_modname($userid, $courseid, 'assign');
@@ -185,10 +219,17 @@ class plugin_userstatsadvanced extends plugin_base {
                 $selectedcmids = $this->parse_selected_cmids($selectedcmidsraw);
                 return $this->get_logged_content_progress($userid, $courseid, $selectedcmids);
 
+            case 'recursos_completados':
+                $selectedcmids = $this->parse_selected_cmids($selectedcmidsraw);
+                return $this->get_completed_resources_progress($userid, $courseid, $selectedcmids);
+
             case 'finalizacion_cruzada':
                 return $this->get_course_completion_progress($userid, $courseid);
 
             case 'correos':
+                $totalmessages = (string)$this->count_course_mail_messages($userid, $courseid);
+                return $this->append_show_messages_button($totalmessages, $courseid, $userid, $stat_type);
+
             case 'mensajes_tutor':
                 $totalmessages = (string)$this->count_messages_by_course_group(
                     $userid,
@@ -203,7 +244,7 @@ class plugin_userstatsadvanced extends plugin_base {
 
             case 'registros':
             case 'logs_integracion':
-                $total = (string)$this->get_time_tracking_logs_count($userid, $courseid, $starttime, $endtime);
+                $total = (string)$this->get_time_tracking_logs_count($userid, $courseid, $starttime, $endtime, $scope);
                 $url = $this->build_show_logs_url($courseid, $userid, $sessionlimittime, $starttime, $endtime);
                 $button = '<a class="btn btn-info btn-sm" href="' . s($url) .
                     '" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, \'userstatsadvancedlogs\', ' .
@@ -211,7 +252,7 @@ class plugin_userstatsadvanced extends plugin_base {
                 return $total . '<br>' . $button;
 
             case 'dias_conexion':
-                $totaldays = (string)$this->get_time_tracking_days_count($userid, $courseid, $starttime, $endtime);
+                $totaldays = (string)$this->get_time_tracking_days_count($userid, $courseid, $starttime, $endtime, $scope);
                 $url = $this->build_show_logs_url($courseid, $userid, $sessionlimittime, $starttime, $endtime);
                 $button = '<a class="btn btn-info btn-sm" href="' . s($url) .
                     '" target="_blank" rel="noopener noreferrer" onclick="window.open(this.href, \'userstatsadvancedlogs\', ' .
@@ -232,25 +273,15 @@ class plugin_userstatsadvanced extends plugin_base {
                 return $this->append_show_messages_button($totalposts, $courseid, $userid, $stat_type);
 
             case 'ips_utilizadas':
-                $sql = "SELECT COUNT(DISTINCT l.ip)
-                          FROM {logstore_standard_log} l
-                         WHERE l.userid = :userid
-                           AND l.courseid = :courseid
-                           AND l.ip IS NOT NULL
-                           AND l.ip <> ''";
-                $totalips = $DB->get_field_sql($sql, ['userid' => $userid, 'courseid' => $courseid]);
-                return (string)(($totalips !== false && $totalips !== null) ? (int)$totalips : 0);
+                $iprecords = $this->get_log_ip_breakdown_records($userid, $courseid, $starttime, $endtime, $scope);
+                return $this->format_ip_breakdown_for_cell($iprecords);
 
             case 'ultima_ip':
-                $sql = "SELECT l.id, l.ip
-                          FROM {logstore_standard_log} l
-                         WHERE l.userid = :userid
-                           AND l.courseid = :courseid
-                           AND l.ip IS NOT NULL
-                           AND l.ip <> ''
-                      ORDER BY l.timecreated DESC, l.id DESC";
-                $record = $DB->get_record_sql($sql, ['userid' => $userid, 'courseid' => $courseid], IGNORE_MULTIPLE);
-                return (!empty($record->ip)) ? (string)$record->ip : '-';
+                $iprecords = $this->get_log_ip_breakdown_records($userid, $courseid, $starttime, $endtime, $scope);
+                if (empty($iprecords[0]['ip'])) {
+                    return '-';
+                }
+                return (string)$iprecords[0]['ip'];
 
             case 'nota_final':
                 $sql = "SELECT gg.finalgrade
@@ -268,21 +299,23 @@ class plugin_userstatsadvanced extends plugin_base {
                 return format_float((float)$finalgrade, 2);
 
             case 'primer_acceso':
+                $params = [];
+                $where = $this->get_time_tracking_logs_where_sql($params, $userid, $courseid, $starttime, $endtime, $scope);
                 $sql = "SELECT MIN(l.timecreated)
                           FROM {logstore_standard_log} l
-                         WHERE l.userid = :userid
-                           AND l.courseid = :courseid";
-                $firstaccess = $DB->get_field_sql($sql, ['userid' => $userid, 'courseid' => $courseid]);
+                         WHERE {$where}";
+                $firstaccess = $DB->get_field_sql($sql, $params);
                 return ($firstaccess !== false && $firstaccess !== null)
                     ? $this->format_access_datetime((int)$firstaccess)
                     : 'No visitado';
 
             case 'ultimo_acceso':
+                $params = [];
+                $where = $this->get_time_tracking_logs_where_sql($params, $userid, $courseid, $starttime, $endtime, $scope);
                 $sql = "SELECT MAX(l.timecreated)
                           FROM {logstore_standard_log} l
-                         WHERE l.userid = :userid
-                           AND l.courseid = :courseid";
-                $lastaccess = $DB->get_field_sql($sql, ['userid' => $userid, 'courseid' => $courseid]);
+                         WHERE {$where}";
+                $lastaccess = $DB->get_field_sql($sql, $params);
                 return ($lastaccess !== false && $lastaccess !== null)
                     ? $this->format_access_datetime((int)$lastaccess)
                     : 'No visitado';
@@ -335,7 +368,8 @@ class plugin_userstatsadvanced extends plugin_base {
                     $courseid,
                     $starttime,
                     $endtime,
-                    $sessionlimittime
+                    $sessionlimittime,
+                    $scope
                 );
                 return $this->format_duration_hms((int)$totalseconds, true);
 
@@ -345,7 +379,8 @@ class plugin_userstatsadvanced extends plugin_base {
                     $courseid,
                     $starttime,
                     $endtime,
-                    $sessionlimittime
+                    $sessionlimittime,
+                    $scope
                 );
 
             default:
@@ -664,7 +699,9 @@ class plugin_userstatsadvanced extends plugin_base {
         $urlparams = [
             'id' => $modalreportid,
             'courseid' => $courseid,
+            'userid' => $userid,
             'filter_users' => $userid,
+            'filter_courses' => $courseid,
             'embed' => 1,
         ];
         $selectedcmids = $this->parse_selected_cmids($selectedcmidsraw);
@@ -736,6 +773,7 @@ class plugin_userstatsadvanced extends plugin_base {
             case 'tiempo_total':
                 return '00h 00m 00s';
             case 'contenidos_visualizados':
+            case 'recursos_completados':
             case 'finalizacion_cruzada':
                 return '0 / 0 (0.00%)';
             case 'actividades_aprendizaje':
@@ -754,8 +792,9 @@ class plugin_userstatsadvanced extends plugin_base {
             case 'interacciones_foros':
             case 'mensajes_foro':
             case 'foros_publicados':
-            case 'ips_utilizadas':
                 return '0';
+            case 'ips_utilizadas':
+                return '-';
             default:
                 return 'En desarrollo...';
         }
@@ -790,6 +829,10 @@ class plugin_userstatsadvanced extends plugin_base {
         if ($endtime > 0) {
             $params['endtime'] = $endtime;
         }
+        $scope = $this->resolve_access_scope_from_request();
+        if ($scope !== self::ACCESS_SCOPE_COURSEONLY) {
+            $params['filter_accessscope'] = $scope;
+        }
         $reportid = optional_param('id', 0, PARAM_INT);
         if ($reportid > 0) {
             $params['reportid'] = $reportid;
@@ -797,6 +840,194 @@ class plugin_userstatsadvanced extends plugin_base {
 
         $url = new moodle_url('/blocks/configurable_reports/components/columns/userstatsadvanced/show_logs.php', $params);
         return $url->out(false);
+    }
+
+    /**
+     * Returns currently selected access scope from request.
+     *
+     * @return string
+     */
+    protected function resolve_access_scope_from_request(): string {
+        $scope = optional_param('filter_accessscope', self::ACCESS_SCOPE_COURSEPLATFORM, PARAM_ALPHA);
+        if (!in_array($scope, [self::ACCESS_SCOPE_COURSEONLY, self::ACCESS_SCOPE_COURSEPLATFORM], true)) {
+            return self::ACCESS_SCOPE_COURSEPLATFORM;
+        }
+
+        return $scope;
+    }
+
+    /**
+     * Resolves effective report time range from filters or academic course period.
+     *
+     * @param int $courseid
+     * @param int $starttime
+     * @param int $endtime
+     * @param int $userid
+     * @return array{0:int,1:int}
+     */
+    protected function resolve_effective_time_range(
+        int $courseid,
+        int $starttime = 0,
+        int $endtime = 0,
+        int $userid = 0
+    ): array {
+        global $DB;
+
+        [$requeststarttime, $requestendtime] = $this->parse_filter_time_range_from_request();
+        if ($requeststarttime > 0) {
+            $starttime = $requeststarttime;
+        }
+        if ($requestendtime > 0) {
+            $endtime = $requestendtime;
+        }
+
+        if ($starttime <= 0 || $endtime <= 0 || $endtime < $starttime) {
+            $course = $DB->get_record('course', ['id' => $courseid], 'id,startdate,enddate', IGNORE_MISSING);
+            if ($course) {
+                if ($starttime <= 0 && !empty($course->startdate)) {
+                    $starttime = (int)$course->startdate;
+                }
+                if ($endtime <= 0 && !empty($course->enddate)) {
+                    $endtime = (int)$course->enddate;
+                }
+            }
+        }
+
+        if ($starttime < 0) {
+            $starttime = 0;
+        }
+        if ($endtime <= 0) {
+            $endtime = self::DEFAULT_REPORT_ENDTIME;
+        }
+        [$enrolstarttime, $enrolendtime] = $this->get_user_enrolment_time_range($userid, $courseid);
+        if ($enrolstarttime > 0) {
+            $starttime = ($starttime > 0) ? max($starttime, $enrolstarttime) : $enrolstarttime;
+        }
+        if ($enrolendtime > 0) {
+            $endtime = ($endtime > 0) ? min($endtime, $enrolendtime) : $enrolendtime;
+        }
+        if ($endtime < $starttime) {
+            $endtime = $starttime;
+        }
+
+        return [$starttime, $endtime];
+    }
+
+    /**
+     * Returns effective enrolment window for an active user enrolment in the course.
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @return array{0:int,1:int}
+     */
+    protected function get_user_enrolment_time_range(int $userid, int $courseid): array {
+        global $DB;
+
+        if ($userid <= 0 || $courseid <= 0) {
+            return [0, 0];
+        }
+
+        $sql = "SELECT MIN(CASE WHEN ue.timestart > 0 THEN ue.timestart ELSE NULL END) AS mintimestart,
+                       MAX(CASE WHEN ue.timeend > 0 THEN ue.timeend ELSE NULL END) AS maxtimeend
+                  FROM {user_enrolments} ue
+                  JOIN {enrol} e
+                    ON e.id = ue.enrolid
+                 WHERE ue.userid = :userid
+                   AND e.courseid = :courseid
+                   AND ue.status = 0
+                   AND e.status = 0";
+        $record = $DB->get_record_sql($sql, [
+            'userid' => $userid,
+            'courseid' => $courseid,
+        ]);
+        if (!$record) {
+            return [0, 0];
+        }
+
+        $mintimestart = !empty($record->mintimestart) ? (int)$record->mintimestart : 0;
+        $maxtimeend = !empty($record->maxtimeend) ? (int)$record->maxtimeend : 0;
+
+        return [$mintimestart, $maxtimeend];
+    }
+
+    /**
+     * Parses start/end filter timestamps from request date selectors.
+     *
+     * @return array{0:int,1:int}
+     */
+    protected function parse_filter_time_range_from_request(): array {
+        $requeststarttime = 0;
+        $requestendtime = 0;
+
+        $filterstarttime = optional_param_array('filter_starttime', [], PARAM_RAW);
+        $filterendtime = optional_param_array('filter_endtime', [], PARAM_RAW);
+
+        if (!empty($filterstarttime) && isset($filterstarttime['year'], $filterstarttime['month'], $filterstarttime['day'])) {
+            $requeststarttime = make_timestamp(
+                (int)$filterstarttime['year'],
+                (int)$filterstarttime['month'],
+                (int)$filterstarttime['day'],
+                isset($filterstarttime['hour']) ? (int)$filterstarttime['hour'] : 0,
+                isset($filterstarttime['minute']) ? (int)$filterstarttime['minute'] : 0
+            );
+        }
+
+        if (!empty($filterendtime) && isset($filterendtime['year'], $filterendtime['month'], $filterendtime['day'])) {
+            $requestendtime = make_timestamp(
+                (int)$filterendtime['year'],
+                (int)$filterendtime['month'],
+                (int)$filterendtime['day'],
+                isset($filterendtime['hour']) ? (int)$filterendtime['hour'] : 0,
+                isset($filterendtime['minute']) ? (int)$filterendtime['minute'] : 0
+            );
+        }
+
+        return [$requeststarttime, $requestendtime];
+    }
+
+    /**
+     * Returns SQL condition for course scope (course only vs course + platform).
+     *
+     * @param array $params
+     * @param int $courseid
+     * @param string $scope
+     * @param string $field
+     * @param bool $platformloginsonly
+     * @return string
+     */
+    protected function get_log_scope_condition_sql(
+        array &$params,
+        int $courseid,
+        string $scope,
+        string $field = 'l.courseid',
+        bool $platformloginsonly = false
+    ): string {
+        if ($scope === self::ACCESS_SCOPE_COURSEPLATFORM) {
+            $params['courseid'] = $courseid;
+            $params['platformcourseid'] = 0;
+            if ($platformloginsonly) {
+                $platformcondition = $this->get_platform_login_event_condition_sql($params, 'l.eventname');
+                return "({$field} = :courseid OR ({$field} = :platformcourseid AND {$platformcondition}))";
+            }
+            return "({$field} = :courseid OR {$field} = :platformcourseid)";
+        }
+
+        $params['courseid'] = $courseid;
+        return "{$field} = :courseid";
+    }
+
+    /**
+     * Returns SQL condition that matches platform login/logout events.
+     *
+     * @param array $params
+     * @param string $eventfield
+     * @return string
+     */
+    protected function get_platform_login_event_condition_sql(array &$params, string $eventfield = 'l.eventname'): string {
+        $params['platformeventloggedin'] = self::EVENT_USER_LOGGEDIN;
+        $params['platformeventloggedout'] = self::EVENT_USER_LOGGEDOUT;
+
+        return "({$eventfield} = :platformeventloggedin OR {$eventfield} = :platformeventloggedout)";
     }
 
     /**
@@ -827,6 +1058,39 @@ class plugin_userstatsadvanced extends plugin_base {
 
         $url = new moodle_url(
             '/blocks/configurable_reports/components/columns/userstatsadvanced/show_evaluations.php',
+            $params
+        );
+        return $url->out(false);
+    }
+
+    /**
+     * Builds URL for activities detail popup.
+     *
+     * @param int $courseid
+     * @param int $userid
+     * @param string $selectedcmidsraw
+     * @return string
+     */
+    protected function build_show_activities_url(
+        int $courseid,
+        int $userid,
+        string $selectedcmidsraw = ''
+    ): string {
+        $params = [
+            'courseid' => $courseid,
+            'userid' => $userid,
+        ];
+        $selectedcmids = $this->parse_selected_cmids($selectedcmidsraw);
+        if (!empty($selectedcmids)) {
+            $params['filter_userstatsadvanced_selectedcmids'] = implode(',', $selectedcmids);
+        }
+        $reportid = optional_param('id', 0, PARAM_INT);
+        if ($reportid > 0) {
+            $params['reportid'] = $reportid;
+        }
+
+        $url = new moodle_url(
+            '/blocks/configurable_reports/components/columns/userstatsadvanced/show_activities.php',
             $params
         );
         return $url->out(false);
@@ -894,7 +1158,7 @@ class plugin_userstatsadvanced extends plugin_base {
 
     /**
      * Resolves a session limit for the daily logs popup.
-     * Priority: tiempo_total column in current report > provided fallback > 30m default.
+     * Priority: tiempo_total column in current report > provided fallback > default session limit.
      *
      * @param int $courseid
      * @param int $fallbacksessionlimit
@@ -951,7 +1215,7 @@ class plugin_userstatsadvanced extends plugin_base {
             return $fallbacksessionlimit;
         }
 
-        return 30 * 60;
+        return self::DEFAULT_SESSION_LIMIT;
     }
     /**
      * Builds a shared WHERE clause for time-tracking logs.
@@ -968,15 +1232,31 @@ class plugin_userstatsadvanced extends plugin_base {
         int $userid,
         int $courseid,
         int $starttime = 0,
-        int $endtime = 0
+        int $endtime = 0,
+        string $scope = self::ACCESS_SCOPE_COURSEONLY
     ): string {
+        $scope = ($scope === self::ACCESS_SCOPE_COURSEPLATFORM)
+            ? self::ACCESS_SCOPE_COURSEPLATFORM
+            : self::ACCESS_SCOPE_COURSEONLY;
         $params = [
             'userid' => $userid,
             'courseid' => $courseid,
         ];
 
-        $where = "l.userid = :userid
-                    AND l.courseid = :courseid";
+        $where = "l.userid = :userid";
+        if ($scope === self::ACCESS_SCOPE_COURSEPLATFORM) {
+            $params['platformcourseid'] = 0;
+            $platformeventsfilter = $this->get_platform_login_event_condition_sql($params, 'l.eventname');
+            $where .= " AND (
+                        l.courseid = :courseid
+                        OR
+                        (l.courseid = :platformcourseid AND {$platformeventsfilter})
+                    )";
+        } else {
+            $courseeventsfilter = $this->get_time_tracking_mixed_event_filter_sql($params);
+            $where .= " AND l.courseid = :courseid
+                        AND {$courseeventsfilter}";
+        }
         if ($starttime > 0) {
             $where .= " AND l.timecreated >= :starttime";
             $params['starttime'] = $starttime;
@@ -985,7 +1265,6 @@ class plugin_userstatsadvanced extends plugin_base {
             $where .= " AND l.timecreated <= :endtime";
             $params['endtime'] = $endtime;
         }
-        $where .= $this->get_time_tracking_mixed_event_filter_sql($params);
 
         return $where;
     }
@@ -1003,12 +1282,13 @@ class plugin_userstatsadvanced extends plugin_base {
         int $userid,
         int $courseid,
         int $starttime = 0,
-        int $endtime = 0
+        int $endtime = 0,
+        string $scope = self::ACCESS_SCOPE_COURSEONLY
     ): int {
         global $DB;
 
         $params = [];
-        $where = $this->get_time_tracking_logs_where_sql($params, $userid, $courseid, $starttime, $endtime);
+        $where = $this->get_time_tracking_logs_where_sql($params, $userid, $courseid, $starttime, $endtime, $scope);
         $sql = "SELECT COUNT(1)
                   FROM {logstore_standard_log} l
                  WHERE $where";
@@ -1030,12 +1310,13 @@ class plugin_userstatsadvanced extends plugin_base {
         int $userid,
         int $courseid,
         int $starttime = 0,
-        int $endtime = 0
+        int $endtime = 0,
+        string $scope = self::ACCESS_SCOPE_COURSEONLY
     ): int {
         global $DB;
 
         $params = [];
-        $where = $this->get_time_tracking_logs_where_sql($params, $userid, $courseid, $starttime, $endtime);
+        $where = $this->get_time_tracking_logs_where_sql($params, $userid, $courseid, $starttime, $endtime, $scope);
         $sql = "SELECT COUNT(DISTINCT FLOOR(l.timecreated / 86400))
                   FROM {logstore_standard_log} l
                  WHERE $where";
@@ -1059,14 +1340,16 @@ class plugin_userstatsadvanced extends plugin_base {
         int $courseid,
         int $starttime = 0,
         int $endtime = 0,
-        int $sessionlimittime = 1800
+        int $sessionlimittime = self::DEFAULT_SESSION_LIMIT,
+        string $scope = self::ACCESS_SCOPE_COURSEONLY
     ): array {
         return $this->get_daily_connection_totals(
             $userid,
             $courseid,
             $starttime,
             $endtime,
-            $sessionlimittime
+            $sessionlimittime,
+            $scope
         );
     }
 
@@ -1154,27 +1437,30 @@ class plugin_userstatsadvanced extends plugin_base {
         int $courseid,
         int $starttime = 0,
         int $endtime = 0,
-        int $sessionlimittime = 1800
+        int $sessionlimittime = self::DEFAULT_SESSION_LIMIT,
+        string $scope = self::ACCESS_SCOPE_COURSEONLY
     ): array {
         global $DB;
-        $consolidatedtotals = $this->get_consolidated_daily_connection_totals($userid, $courseid, $starttime, $endtime);
-        if (!empty($consolidatedtotals)) {
-            return $consolidatedtotals;
+        if ($scope === self::ACCESS_SCOPE_COURSEONLY) {
+            $consolidatedtotals = $this->get_consolidated_daily_connection_totals($userid, $courseid, $starttime, $endtime);
+            if (!empty($consolidatedtotals)) {
+                return $consolidatedtotals;
+            }
         }
         $params = [];
-        $where = $this->get_time_tracking_logs_where_sql($params, $userid, $courseid, $starttime, $endtime);
+        $where = $this->get_time_tracking_logs_where_sql($params, $userid, $courseid, $starttime, $endtime, $scope);
 
-        $sql = "SELECT l.id, l.timecreated, FLOOR(l.timecreated / 86400) AS daybucket
+        $sql = "SELECT l.id, l.timecreated, l.eventname, FLOOR(l.timecreated / 86400) AS daybucket
                   FROM {logstore_standard_log} l
                  WHERE $where
-              ORDER BY l.timecreated ASC, l.id ASC";
+               ORDER BY l.timecreated ASC, l.id ASC";
         $logs = $DB->get_records_sql($sql, $params);
 
         if (!$logs) {
             return [];
         }
 
-        $limitinseconds = ($sessionlimittime > 0) ? $sessionlimittime : (30 * 60);
+        $limitinseconds = ($sessionlimittime > 0) ? $sessionlimittime : self::DEFAULT_SESSION_LIMIT;
         $totalsbyday = [];
         $previousdaybucket = null;
         $previoustime = null;
@@ -1182,6 +1468,7 @@ class plugin_userstatsadvanced extends plugin_base {
         foreach ($logs as $log) {
             $daybucket = (int)$log->daybucket;
             $currenttime = (int)$log->timecreated;
+            $isloginevent = $this->is_login_event_name((string)($log->eventname ?? ''));
 
             if (!array_key_exists($daybucket, $totalsbyday)) {
                 $totalsbyday[$daybucket] = 0;
@@ -1189,7 +1476,7 @@ class plugin_userstatsadvanced extends plugin_base {
 
             if ($previousdaybucket !== null && $daybucket === $previousdaybucket && $previoustime !== null) {
                 $delta = $currenttime - $previoustime;
-                if ($delta > 0 && $delta <= $limitinseconds) {
+                if ($delta > 0 && $delta <= $limitinseconds && !$isloginevent) {
                     $totalsbyday[$daybucket] += $delta;
                 }
             }
@@ -1217,14 +1504,16 @@ class plugin_userstatsadvanced extends plugin_base {
         int $courseid,
         int $starttime = 0,
         int $endtime = 0,
-        int $sessionlimittime = 1800
+        int $sessionlimittime = self::DEFAULT_SESSION_LIMIT,
+        string $scope = self::ACCESS_SCOPE_COURSEONLY
     ): int {
         $totalsbyday = $this->get_time_tracking_daily_connection_totals(
             $userid,
             $courseid,
             $starttime,
             $endtime,
-            $sessionlimittime
+            $sessionlimittime,
+            $scope
         );
 
         if (empty($totalsbyday)) {
@@ -1239,7 +1528,7 @@ class plugin_userstatsadvanced extends plugin_base {
     }
 
     /**
-     * Returns SQL filter used in time tracking metrics.
+     * Returns SQL filter used in time tracking metrics for course events.
      * Counts only events that represent user navigation/work inside a specific course:
      * - Course page views.
      * - Activity/module interactions (mod_*) in module context.
@@ -1259,7 +1548,7 @@ class plugin_userstatsadvanced extends plugin_base {
         $params['ttcrudupdate'] = 'u';
         $params['ttmodcomponentlike'] = 'mod\_%';
 
-        return " AND (
+        return "(
                     (
                         l.contextlevel = :ttcontextcourse
                         AND l.target = :tttargetcourse
@@ -1280,6 +1569,16 @@ class plugin_userstatsadvanced extends plugin_base {
     }
 
     /**
+     * Returns true when event represents a platform login.
+     *
+     * @param string $eventname
+     * @return bool
+     */
+    protected function is_login_event_name(string $eventname): bool {
+        return ($eventname === self::EVENT_USER_LOGGEDIN);
+    }
+
+    /**
      * Renders the daily connection times table as HTML.
      *
      * @param int $userid
@@ -1294,14 +1593,16 @@ class plugin_userstatsadvanced extends plugin_base {
         int $courseid,
         int $starttime = 0,
         int $endtime = 0,
-        int $sessionlimittime = 1800
+        int $sessionlimittime = self::DEFAULT_SESSION_LIMIT,
+        string $scope = self::ACCESS_SCOPE_COURSEONLY
     ): string {
         $totalsbyday = $this->get_time_tracking_daily_connection_totals(
             $userid,
             $courseid,
             $starttime,
             $endtime,
-            $sessionlimittime
+            $sessionlimittime,
+            $scope
         );
         if (empty($totalsbyday)) {
             return '<div style="font-size:12px;">Sin registros de conexión.</div>';
@@ -1358,6 +1659,151 @@ class plugin_userstatsadvanced extends plugin_base {
     protected function format_access_datetime(int $timestamp): string {
         return userdate($timestamp, '%d/%m/%Y') . '<br>' . userdate($timestamp, '%H:%M');
     }
+
+    /**
+     * Returns distinct normalized IP records used by a user, ordered by latest usage.
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @param int $starttime
+     * @param int $endtime
+     * @param string $scope
+     * @return array<int,array{ip:string,lastseen:int,total:int}>
+     */
+    protected function get_log_ip_breakdown_records(
+        int $userid,
+        int $courseid,
+        int $starttime = 0,
+        int $endtime = 0,
+        string $scope = self::ACCESS_SCOPE_COURSEONLY
+    ): array {
+        global $DB;
+
+        if ($userid <= 0 || $courseid <= 0) {
+            return [];
+        }
+
+        $params = ['userid' => $userid];
+        $where = 'l.userid = :userid AND ' . $this->get_log_scope_condition_sql($params, $courseid, $scope);
+        if ($starttime > 0) {
+            $where .= " AND l.timecreated >= :ipstarttime";
+            $params['ipstarttime'] = $starttime;
+        }
+        if ($endtime > 0) {
+            $where .= " AND l.timecreated <= :ipendtime";
+            $params['ipendtime'] = $endtime;
+        }
+
+        $sql = "SELECT l.ip,
+                       MAX(l.timecreated) AS lastseen,
+                       COUNT(1) AS total
+                  FROM {logstore_standard_log} l
+                 WHERE {$where}
+                   AND l.ip IS NOT NULL
+                   AND l.ip <> ''
+              GROUP BY l.ip";
+        $rows = $DB->get_records_sql($sql, $params);
+        if (empty($rows)) {
+            return [];
+        }
+
+        $recordsbyip = [];
+        foreach ($rows as $row) {
+            $normalizedip = $this->normalize_log_ip((string)($row->ip ?? ''));
+            if ($normalizedip === '') {
+                continue;
+            }
+
+            $lastseen = !empty($row->lastseen) ? (int)$row->lastseen : 0;
+            $total = !empty($row->total) ? (int)$row->total : 0;
+            if (!isset($recordsbyip[$normalizedip])) {
+                $recordsbyip[$normalizedip] = [
+                    'ip' => $normalizedip,
+                    'lastseen' => $lastseen,
+                    'total' => $total,
+                ];
+                continue;
+            }
+
+            $recordsbyip[$normalizedip]['lastseen'] = max($recordsbyip[$normalizedip]['lastseen'], $lastseen);
+            $recordsbyip[$normalizedip]['total'] += $total;
+        }
+
+        if (empty($recordsbyip)) {
+            return [];
+        }
+
+        $records = array_values($recordsbyip);
+        usort($records, static function(array $a, array $b): int {
+            $atime = (int)($a['lastseen'] ?? 0);
+            $btime = (int)($b['lastseen'] ?? 0);
+            if ($atime === $btime) {
+                return strcmp((string)($a['ip'] ?? ''), (string)($b['ip'] ?? ''));
+            }
+            return ($atime > $btime) ? -1 : 1;
+        });
+
+        return $records;
+    }
+
+    /**
+     * Normalizes raw log IP values.
+     *
+     * @param string $rawip
+     * @return string
+     */
+    protected function normalize_log_ip(string $rawip): string {
+        $ip = trim($rawip);
+        if ($ip === '') {
+            return '';
+        }
+
+        if (strpos($ip, ',') !== false) {
+            $parts = explode(',', $ip);
+            $ip = trim((string)reset($parts));
+        }
+
+        if (core_text::strtolower($ip) === 'unknown') {
+            return '';
+        }
+
+        if (strpos(core_text::strtolower($ip), '::ffff:') === 0) {
+            $candidate = substr($ip, 7);
+            if (filter_var($candidate, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $ip = $candidate;
+            }
+        }
+
+        return $ip;
+    }
+
+    /**
+     * Formats IP records for table cell display.
+     *
+     * @param array<int,array{ip:string,lastseen:int,total:int}> $iprecords
+     * @return string
+     */
+    protected function format_ip_breakdown_for_cell(array $iprecords): string {
+        if (empty($iprecords)) {
+            return '-';
+        }
+
+        $labels = [];
+        foreach ($iprecords as $record) {
+            $ip = trim((string)($record['ip'] ?? ''));
+            if ($ip === '') {
+                continue;
+            }
+            $labels[] = s($ip);
+        }
+
+        if (empty($labels)) {
+            return '-';
+        }
+
+        return implode('<br>', $labels);
+    }
+
     /**
      * Returns completion fraction for a module type in a course.
      *
@@ -1460,6 +1906,61 @@ class plugin_userstatsadvanced extends plugin_base {
 
         $percentage = ($total > 0) ? (($viewed * 100) / $total) : 0;
         return $viewed . ' / ' . $total . ' (' . format_float($percentage, 2) . '%)';
+    }
+
+    /**
+     * Returns completed resources progress based on Moodle completion: X / Y (Z%).
+     * X = completed visible course modules with completion enabled.
+     * Y = total visible course modules with completion enabled.
+     *
+     * If selectedcmids is empty, all visible completion-enabled modules in the course are used.
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @param array<int> $selectedcmids
+     * @return string
+     */
+    protected function get_completed_resources_progress(int $userid, int $courseid, array $selectedcmids = []): string {
+        global $DB;
+
+        $params = [
+            'courseid' => $courseid,
+            'userid' => $userid,
+        ];
+        $selectedwhere = '';
+        if (!empty($selectedcmids)) {
+            [$insql, $inparams] = $DB->get_in_or_equal($selectedcmids, SQL_PARAMS_NAMED, 'selectedcmid');
+            $selectedwhere = " AND cm.id $insql";
+            $params = array_merge($params, $inparams);
+        }
+
+        $totalsql = "SELECT COUNT(DISTINCT cm.id)
+                       FROM {course_modules} cm
+                      WHERE cm.course = :courseid
+                        AND cm.visible = 1
+                        AND cm.completion > 0" . $selectedwhere;
+        $total = $DB->get_field_sql($totalsql, $params);
+        $total = ($total !== false && $total !== null) ? (int)$total : 0;
+        if ($total <= 0) {
+            return '0 / 0 (0.00%)';
+        }
+
+        $completedsql = "SELECT COUNT(DISTINCT cm.id)
+                           FROM {course_modules} cm
+                           JOIN {course_modules_completion} cmc ON cmc.coursemoduleid = cm.id
+                          WHERE cm.course = :courseid
+                            AND cm.visible = 1
+                            AND cm.completion > 0
+                            AND cmc.userid = :userid
+                            AND cmc.completionstate > 0" . $selectedwhere;
+        $completed = $DB->get_field_sql($completedsql, $params);
+        $completed = ($completed !== false && $completed !== null) ? (int)$completed : 0;
+        if ($completed > $total) {
+            $completed = $total;
+        }
+
+        $percentage = ($total > 0) ? (($completed * 100) / $total) : 0.0;
+        return $completed . ' / ' . $total . ' (' . format_float($percentage, 2) . '%)';
     }
 
     /**
@@ -1608,18 +2109,21 @@ class plugin_userstatsadvanced extends plugin_base {
             return [];
         }
 
+        $contextids = $this->get_course_related_context_ids($courseid);
+        if (empty($contextids)) {
+            return [];
+        }
+
         [$insql, $inparams] = $DB->get_in_or_equal($archetypes, SQL_PARAMS_NAMED, 'arc');
+        [$ctxinsql, $ctxparams] = $DB->get_in_or_equal($contextids, SQL_PARAMS_NAMED, 'ctxid');
         $params = array_merge([
-            'contextlevel' => CONTEXT_COURSE,
-            'courseid' => $courseid,
-        ], $inparams);
+        ], $inparams, $ctxparams);
 
         $sql = "SELECT DISTINCT ra.userid
                   FROM {role_assignments} ra
                   JOIN {context} ctx ON ctx.id = ra.contextid
                   JOIN {role} r ON r.id = ra.roleid
-                 WHERE ctx.contextlevel = :contextlevel
-                   AND ctx.instanceid = :courseid
+                 WHERE ctx.id $ctxinsql
                    AND r.archetype $insql";
         $records = $DB->get_records_sql($sql, $params);
 
@@ -1639,6 +2143,198 @@ class plugin_userstatsadvanced extends plugin_base {
     }
 
     /**
+     * Returns context IDs relevant for a course role lookup (course + parent contexts).
+     *
+     * @param int $courseid
+     * @return array
+     */
+    protected function get_course_related_context_ids(int $courseid): array {
+        global $DB;
+
+        if ($courseid <= 0) {
+            return [];
+        }
+
+        $coursecontext = $DB->get_record('context', [
+            'contextlevel' => CONTEXT_COURSE,
+            'instanceid' => $courseid,
+        ], 'id,path', IGNORE_MISSING);
+        if (!$coursecontext) {
+            return [];
+        }
+
+        $contextids = [];
+        if (!empty($coursecontext->path)) {
+            foreach (explode('/', trim((string)$coursecontext->path, '/')) as $chunk) {
+                $id = (int)$chunk;
+                if ($id > 0) {
+                    $contextids[$id] = $id;
+                }
+            }
+        }
+
+        $coursecontextid = (int)$coursecontext->id;
+        if ($coursecontextid > 0) {
+            $contextids[$coursecontextid] = $coursecontextid;
+        }
+
+        return array_values($contextids);
+    }
+
+    /**
+     * Returns distinct user IDs with non-student roles assigned in the course context.
+     * Useful for platforms with custom tutor/admin roles without teacher archetype.
+     *
+     * @param int $courseid
+     * @param int $excludeuserid
+     * @return array
+     */
+    protected function get_course_nonstudent_user_ids(int $courseid, int $excludeuserid = 0): array {
+        global $DB;
+
+        $contextids = $this->get_course_related_context_ids($courseid);
+        if (empty($contextids)) {
+            return [];
+        }
+
+        [$ctxinsql, $ctxparams] = $DB->get_in_or_equal($contextids, SQL_PARAMS_NAMED, 'ctxnonstd');
+        $sql = "SELECT DISTINCT ra.userid
+                  FROM {role_assignments} ra
+                  JOIN {context} ctx ON ctx.id = ra.contextid
+                  JOIN {role} r ON r.id = ra.roleid
+                 WHERE ctx.id $ctxinsql
+                   AND (r.archetype IS NULL OR r.archetype = '' OR r.archetype <> :studentarchetype)";
+        $records = $DB->get_records_sql($sql, array_merge($ctxparams, [
+            'studentarchetype' => 'student',
+        ]));
+        if (!$records) {
+            return [];
+        }
+
+        $userids = [];
+        foreach ($records as $record) {
+            $id = (int)$record->userid;
+            if ($id > 0 && $id !== $excludeuserid) {
+                $userids[$id] = $id;
+            }
+        }
+
+        return array_values($userids);
+    }
+
+    /**
+     * Returns site admin user IDs.
+     *
+     * @param int $excludeuserid
+     * @return array
+     */
+    protected function get_site_admin_user_ids(int $excludeuserid = 0): array {
+        $userids = [];
+        if (!function_exists('get_admins')) {
+            return [];
+        }
+
+        $admins = get_admins();
+        if (empty($admins)) {
+            return [];
+        }
+
+        foreach ($admins as $admin) {
+            $id = (int)($admin->id ?? 0);
+            if ($id > 0 && $id !== $excludeuserid) {
+                $userids[$id] = $id;
+            }
+        }
+
+        return array_values($userids);
+    }
+
+    /**
+     * Returns target user IDs for "correos" metric.
+     * Includes teachers/managers and custom non-student course roles.
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @return array
+     */
+    protected function get_mail_target_user_ids(int $userid, int $courseid): array {
+        $targetids = $this->get_course_user_ids_by_archetypes(
+            $courseid,
+            ['editingteacher', 'teacher', 'manager'],
+            $userid
+        );
+        $targetids = array_merge($targetids, $this->get_course_nonstudent_user_ids($courseid, $userid));
+        $targetids = array_merge($targetids, $this->get_course_staff_user_ids_by_capability($courseid, $userid));
+
+        if (empty($targetids)) {
+            return [];
+        }
+
+        $targetids = array_map('intval', $targetids);
+        $targetids = array_filter($targetids, static function(int $id): bool {
+            return $id > 0;
+        });
+        $targetids = array_values(array_unique($targetids));
+
+        return $targetids;
+    }
+
+    /**
+     * Counts mail-like messages exchanged with course staff profiles.
+     * Includes direct messages and course forum messages.
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @return int
+     */
+    protected function count_course_mail_messages(int $userid, int $courseid): int {
+        $targetids = $this->get_mail_target_user_ids($userid, $courseid);
+        $directcount = $this->count_messages_by_target_user_ids($userid, $targetids);
+        $forumcount = $this->count_staff_forum_mail_messages($userid, $courseid, $targetids);
+
+        return $directcount + $forumcount;
+    }
+
+    /**
+     * Counts forum posts authored by course staff profiles in the course.
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @param array $targetids
+     * @return int
+     */
+    protected function count_staff_forum_mail_messages(int $userid, int $courseid, array $targetids): int {
+        global $DB;
+
+        if ($courseid <= 0) {
+            return 0;
+        }
+
+        if (empty($targetids)) {
+            $targetids = $this->get_course_staff_user_ids_by_capability($courseid, $userid);
+        }
+        if (empty($targetids)) {
+            return 0;
+        }
+
+        [$insql, $inparams] = $DB->get_in_or_equal($targetids, SQL_PARAMS_NAMED, 'mailstaff');
+        $params = array_merge([
+            'courseid' => $courseid,
+            'userid' => $userid,
+        ], $inparams);
+
+        $sql = "SELECT COUNT(1) AS total
+                  FROM {forum_posts} fp
+                  JOIN {forum_discussions} fd ON fd.id = fp.discussion
+                  JOIN {forum} f ON f.id = fd.forum
+                 WHERE f.course = :courseid
+                   AND fp.userid $insql
+                   AND fp.userid <> :userid";
+        $record = $DB->get_record_sql($sql, $params);
+        return !empty($record->total) ? (int)$record->total : 0;
+    }
+
+    /**
      * Counts user messages exchanged with a role group in the current course.
      *
      * @param int $userid
@@ -1647,9 +2343,26 @@ class plugin_userstatsadvanced extends plugin_base {
      * @return int
      */
     protected function count_messages_by_course_group(int $userid, int $courseid, array $targetarchetypes): int {
+        $targetids = $this->get_course_user_ids_by_archetypes($courseid, $targetarchetypes, $userid);
+        $directcount = $this->count_messages_by_target_user_ids($userid, $targetids);
+        if (!$this->is_student_target_group($targetarchetypes)) {
+            return $directcount;
+        }
+
+        $forumcount = $this->count_forum_messages_with_students($userid, $courseid, $targetids);
+        return $directcount + $forumcount;
+    }
+
+    /**
+     * Counts messages exchanged with a specific set of target user IDs.
+     *
+     * @param int $userid
+     * @param array $targetids
+     * @return int
+     */
+    protected function count_messages_by_target_user_ids(int $userid, array $targetids): int {
         global $DB;
 
-        $targetids = $this->get_course_user_ids_by_archetypes($courseid, $targetarchetypes, $userid);
         if (empty($targetids)) {
             return 0;
         }
@@ -1718,6 +2431,135 @@ class plugin_userstatsadvanced extends plugin_base {
         }
 
         return 0;
+    }
+
+    /**
+     * Returns true when target archetype group represents students only.
+     *
+     * @param array $targetarchetypes
+     * @return bool
+     */
+    protected function is_student_target_group(array $targetarchetypes): bool {
+        if (count($targetarchetypes) !== 1) {
+            return false;
+        }
+
+        return ((string)reset($targetarchetypes) === 'student');
+    }
+
+    /**
+     * Counts forum posts authored by the user in discussions where students participated.
+     * Falls back to all user forum posts in the course when student role mapping is unavailable.
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @param array $studentids
+     * @return int
+     */
+    protected function count_forum_messages_with_students(int $userid, int $courseid, array $studentids = []): int {
+        global $DB;
+
+        if ($courseid <= 0 || $userid <= 0) {
+            return 0;
+        }
+
+        if (empty($studentids)) {
+            $studentids = $this->get_course_user_ids_by_archetypes($courseid, ['student'], $userid);
+        }
+
+        if (empty($studentids)) {
+            return $this->count_forum_messages_authored_by_user($userid, $courseid);
+        }
+
+        [$insql, $inparams] = $DB->get_in_or_equal($studentids, SQL_PARAMS_NAMED, 'stuforum');
+        $params = array_merge([
+            'courseid' => $courseid,
+            'userid' => $userid,
+        ], $inparams);
+
+        $sql = "SELECT COUNT(1) AS total
+                  FROM {forum_posts} fp
+                  JOIN {forum_discussions} fd ON fd.id = fp.discussion
+                  JOIN {forum} f ON f.id = fd.forum
+                 WHERE f.course = :courseid
+                   AND fp.userid = :userid
+                   AND EXISTS (
+                        SELECT 1
+                          FROM {forum_posts} fps
+                         WHERE fps.discussion = fp.discussion
+                           AND fps.userid $insql
+                 )";
+        $record = $DB->get_record_sql($sql, $params);
+        if (!empty($record->total)) {
+            return (int)$record->total;
+        }
+
+        return 0;
+    }
+
+    /**
+     * Counts forum posts authored by the user in a course.
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @return int
+     */
+    protected function count_forum_messages_authored_by_user(int $userid, int $courseid): int {
+        global $DB;
+
+        if ($courseid <= 0 || $userid <= 0) {
+            return 0;
+        }
+
+        $sql = "SELECT COUNT(1) AS total
+                  FROM {forum_posts} fp
+                  JOIN {forum_discussions} fd ON fd.id = fp.discussion
+                  JOIN {forum} f ON f.id = fd.forum
+                 WHERE f.course = :courseid
+                   AND fp.userid = :userid";
+        $record = $DB->get_record_sql($sql, [
+            'courseid' => $courseid,
+            'userid' => $userid,
+        ]);
+
+        return !empty($record->total) ? (int)$record->total : 0;
+    }
+
+    /**
+     * Returns course staff user IDs based on editing capability.
+     *
+     * @param int $courseid
+     * @param int $excludeuserid
+     * @return array
+     */
+    protected function get_course_staff_user_ids_by_capability(int $courseid, int $excludeuserid = 0): array {
+        if ($courseid <= 0) {
+            return [];
+        }
+
+        try {
+            $context = context_course::instance($courseid);
+        } catch (Throwable $t) {
+            return [];
+        }
+        if (!$context) {
+            return [];
+        }
+
+        $users = get_enrolled_users($context, 'moodle/course:update', 0, 'u.id');
+        if (empty($users)) {
+            return [];
+        }
+
+        $userids = [];
+        foreach ($users as $user) {
+            $id = (int)($user->id ?? 0);
+            if ($id > 0 && $id !== $excludeuserid) {
+                $userids[$id] = $id;
+            }
+        }
+
+        return array_values($userids);
     }
     /**
      * Resolve a concrete course ID for metrics that must run inside a course.

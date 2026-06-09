@@ -57,6 +57,50 @@ class report_users extends report_base {
     public function get_all_elements(): array {
         global $DB;
         $courseid = !empty($this->config->courseid) ? (int)$this->config->courseid : 0;
+        $forceduserid = optional_param('filter_users', 0, PARAM_INT);
+        if ($forceduserid <= 0) {
+            $forceduserid = optional_param('userid', 0, PARAM_INT);
+        }
+
+        if ($forceduserid > 0) {
+            if ($courseid > SITEID) {
+                $sql = "SELECT DISTINCT u.id
+                          FROM {user} u
+                          JOIN {user_enrolments} ue ON ue.userid = u.id
+                          JOIN {enrol} e ON e.id = ue.enrolid
+                         WHERE e.courseid = :courseid
+                           AND u.id = :userid
+                           AND u.deleted = 0
+                        UNION
+                        SELECT DISTINCT u.id
+                          FROM {user} u
+                          JOIN {role_assignments} ra ON ra.userid = u.id
+                          JOIN {context} ctx ON ctx.id = ra.contextid
+                         WHERE ctx.contextlevel = :contextlevel
+                           AND ctx.instanceid = :courseid2
+                           AND u.id = :userid2
+                           AND u.deleted = 0
+                      ORDER BY id ASC";
+                $records = $DB->get_records_sql($sql, [
+                    'courseid' => $courseid,
+                    'userid' => $forceduserid,
+                    'contextlevel' => CONTEXT_COURSE,
+                    'courseid2' => $courseid,
+                    'userid2' => $forceduserid,
+                ]);
+                if (!$records) {
+                    return [];
+                }
+                return array_map('intval', array_keys($records));
+            }
+
+            $userrecord = $DB->get_record('user', ['id' => $forceduserid, 'deleted' => 0], 'id', IGNORE_MISSING);
+            if (!$userrecord) {
+                return [];
+            }
+            return [(int)$userrecord->id];
+        }
+
         if ($courseid > SITEID) {
             $sql = "SELECT DISTINCT u.id
                       FROM {user} u

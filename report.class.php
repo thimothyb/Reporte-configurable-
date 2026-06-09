@@ -511,6 +511,363 @@ abstract class report_base {
     }
 
     /**
+     * Synchronizes "02 Progreso" activity columns so they match selected learning activities.
+     *
+     * It updates existing "NOTA ACTIVIDAD N" / "FECHA DE ENTREGA ACTIVIDAD N" columns and appends missing ones
+     * based on the same selected activities used by the linked userstatsadvanced "actividades_aprendizaje" column.
+     *
+     * @param array $columns
+     * @return array
+     */
+    protected function sync_scormadvancedgrades_progress_columns(array $columns): array {
+        if (empty($columns) || empty($this->config) || empty($this->config->id)) {
+            return $columns;
+        }
+
+        // If the report already contains extended quiz progress metrics, keep manual configuration untouched.
+        foreach ($columns as $column) {
+            $pluginname = $column['pluginname'] ?? '';
+            if (is_array($pluginname)) {
+                $pluginname = reset($pluginname);
+            }
+            if ((string)$pluginname !== 'scormadvancedgrades') {
+                continue;
+            }
+
+            $formdata = $column['formdata'] ?? null;
+            if (is_array($formdata)) {
+                $formdata = (object)$formdata;
+            }
+            if (!is_object($formdata)) {
+                continue;
+            }
+
+            $stat = isset($formdata->stat) ? trim((string)$formdata->stat) : '';
+            $columnname = isset($formdata->columname) ? trim((string)$formdata->columname) : '';
+
+            if (
+                ($stat !== '' && preg_match('/^quiz:\d+:(completiondate|score|dedicationtime|opendate|firstpassattempt)$/', $stat)) ||
+                ($columnname !== '' && preg_match('/^\s*(FECHA\s+DE\s+REALIZACION|TIEMPO\s+DE\s+DEDICACION|FECHA\s+DE\s+APERTURA|PRIMER\s+INTENTO\s+APROBADO)\b/iu', $columnname))
+            ) {
+                return $columns;
+            }
+        }
+
+        $notatemplate = null;
+        $fechatemplate = null;
+        $progressindices = [];
+
+        foreach ($columns as $columnindex => $column) {
+            $pluginname = $column['pluginname'] ?? '';
+            if (is_array($pluginname)) {
+                $pluginname = reset($pluginname);
+            }
+            if ((string)$pluginname !== 'scormadvancedgrades') {
+                continue;
+            }
+
+            $formdata = $column['formdata'] ?? null;
+            if (is_array($formdata)) {
+                $formdata = (object)$formdata;
+            }
+            if (!is_object($formdata)) {
+                continue;
+            }
+
+            $columnname = (string)($formdata->columname ?? '');
+            if ($columnname === '') {
+                continue;
+            }
+
+            if (preg_match('/^\s*NOTA\b/iu', $columnname)) {
+                $progressindices[] = $columnindex;
+                if ($notatemplate === null) {
+                    $notatemplate = $column;
+                }
+                continue;
+            }
+
+            if (preg_match('/^\s*FECHA\s+DE\s+ENTREGA\b/iu', $columnname)) {
+                $progressindices[] = $columnindex;
+                if ($fechatemplate === null) {
+                    $fechatemplate = $column;
+                }
+            }
+        }
+
+        if ($notatemplate === null && $fechatemplate === null) {
+            return $columns;
+        }
+
+        $activities = $this->get_progress_reference_assign_activities();
+        if (empty($activities)) {
+            return $columns;
+        }
+
+        $generatedcolumns = [];
+        $totalactivities = count($activities);
+        for ($i = 1; $i <= $totalactivities; $i++) {
+            $activity = $activities[$i - 1];
+            $activitylabel = $this->format_progress_activity_label((string)$activity->name, $i);
+            $notalabel = 'NOTA ' . $activitylabel;
+            $fechalabel = 'FECHA DE ENTREGA ' . $activitylabel;
+            $notastat = 'assign:' . (int)$activity->instanceid . ':score';
+            $fechastat = 'assign:' . (int)$activity->instanceid . ':submissiondate';
+
+            if ($notatemplate !== null) {
+                $generatedcolumns[] = $this->build_progress_column_from_template(
+                    $notatemplate,
+                    $notalabel,
+                    $notastat,
+                    'percent'
+                );
+            }
+
+            if ($fechatemplate !== null) {
+                $generatedcolumns[] = $this->build_progress_column_from_template(
+                    $fechatemplate,
+                    $fechalabel,
+                    $fechastat,
+                    'datetime'
+                );
+            }
+        }
+
+        if (empty($generatedcolumns)) {
+            return $columns;
+        }
+
+        if (empty($progressindices)) {
+            return array_values(array_merge($columns, $generatedcolumns));
+        }
+
+        sort($progressindices, SORT_NUMERIC);
+        $firstprogressindex = (int)reset($progressindices);
+        $lastprogressindex = (int)end($progressindices);
+
+        $before = array_slice($columns, 0, $firstprogressindex);
+        $after = array_slice($columns, $lastprogressindex + 1);
+
+        // Replace old progress columns block with a canonical one: no duplicates, exact activity count.
+        return array_values(array_merge($before, $generatedcolumns, $after));
+    }
+
+    /**
+     * Formats progress column label with activity name only.
+     *
+     * @param string $activityname
+     * @param int $activityindex
+     * @return string
+     */
+    protected function format_progress_activity_label(string $activityname, int $activityindex): string {
+        return 'ACTIVIDAD ' . $activityindex;
+    }
+
+    /**
+     * Builds a progress column payload by cloning a template and replacing title/stat.
+     *
+     * @param array $templatecolumn
+     * @param string $columnlabel
+     * @param string $stat
+     * @param string|null $formatoverride
+     * @return array
+     */
+    protected function build_progress_column_from_template(
+        array $templatecolumn,
+        string $columnlabel,
+        string $stat,
+        ?string $formatoverride = null
+    ): array {
+        $column = $templatecolumn;
+        $formdata = $column['formdata'] ?? new stdClass();
+        if (is_array($formdata)) {
+            $formdata = (object)$formdata;
+        } else if (is_object($formdata)) {
+            // Ensure each generated column owns its own mutable config object.
+            $formdata = clone $formdata;
+        }
+        if (!is_object($formdata)) {
+            $formdata = new stdClass();
+        }
+
+        $formdata->columname = $columnlabel;
+        $formdata->stat = $stat;
+        if ($formatoverride !== null && $formatoverride !== '') {
+            $formdata->format = $formatoverride;
+        }
+        if (isset($formdata->scormid)) {
+            unset($formdata->scormid);
+        }
+        $column['formdata'] = $formdata;
+
+        if (isset($column['id'])) {
+            $column['id'] = 0;
+        }
+
+        return $column;
+    }
+
+    /**
+     * Returns ordered assignment activities used as reference for progress columns.
+     *
+     * @return array<int,object>
+     */
+    protected function get_progress_reference_assign_activities(): array {
+        global $DB;
+
+        $courseid = (int)($this->currentcourseid ?? 0);
+        if ($courseid <= 0 && !empty($this->config->courseid)) {
+            $courseid = (int)$this->config->courseid;
+        }
+        if ($courseid <= 0) {
+            $courseid = optional_param('courseid', 0, PARAM_INT);
+        }
+        if ($courseid <= 0) {
+            return [];
+        }
+
+        $reportid = !empty($this->config->id) ? (int)$this->config->id : 0;
+        $selectedcmidsraw = optional_param('filter_userstatsadvanced_selectedcmids', '', PARAM_RAW_TRIMMED);
+        $selectedcmids = $this->parse_selected_cmids_csv($selectedcmidsraw);
+        if (empty($selectedcmids) && $reportid > 0) {
+            $selectedcmids = $this->resolve_selected_cmids_from_linked_learning_activities_column($courseid, $reportid);
+        }
+
+        $params = [
+            'courseid' => $courseid,
+            'modname' => 'assign',
+        ];
+        $selectedwhere = '';
+        if (!empty($selectedcmids)) {
+            [$insql, $inparams] = $DB->get_in_or_equal($selectedcmids, SQL_PARAMS_NAMED, 'selectedcmid');
+            $selectedwhere = " AND cm.id $insql";
+            $params = array_merge($params, $inparams);
+        }
+
+        $sql = "SELECT cm.id AS cmid,
+                       cm.instance AS instanceid,
+                       a.name
+                  FROM {course_modules} cm
+                  JOIN {modules} m ON m.id = cm.module
+                  JOIN {assign} a ON a.id = cm.instance
+                 WHERE cm.course = :courseid
+                   AND cm.visible = 1
+                   AND m.name = :modname
+                   $selectedwhere
+              ORDER BY cm.section ASC, cm.added ASC, cm.id ASC";
+        $records = $DB->get_records_sql($sql, $params);
+
+        return array_values($records);
+    }
+
+    /**
+     * Resolves selected course-module ids from linked userstatsadvanced "actividades_aprendizaje" column.
+     *
+     * @param int $courseid
+     * @param int $targetreportid
+     * @return array<int>
+     */
+    protected function resolve_selected_cmids_from_linked_learning_activities_column(int $courseid, int $targetreportid): array {
+        global $DB, $CFG;
+
+        if ($courseid <= 0 || $targetreportid <= 0) {
+            return [];
+        }
+
+        if (!function_exists('cr_unserialize')) {
+            require_once($CFG->dirroot . '/blocks/configurable_reports/locallib.php');
+        }
+
+        $reports = $DB->get_records_select(
+            'block_configurable_reports',
+            '(courseid = :courseid OR global = 1)',
+            ['courseid' => $courseid],
+            '',
+            'id,components'
+        );
+
+        foreach ($reports as $report) {
+            try {
+                $components = cr_unserialize((string)$report->components);
+            } catch (Throwable $t) {
+                continue;
+            }
+
+            if (!is_array($components)) {
+                continue;
+            }
+
+            $columnselements = $components['columns']['elements'] ?? [];
+            if (!is_array($columnselements)) {
+                continue;
+            }
+
+            foreach ($columnselements as $column) {
+                $pluginname = $column['pluginname'] ?? '';
+                if (is_array($pluginname)) {
+                    $pluginname = reset($pluginname);
+                }
+                if ((string)$pluginname !== 'userstatsadvanced') {
+                    continue;
+                }
+
+                $formdata = $column['formdata'] ?? null;
+                if (is_array($formdata)) {
+                    $formdata = (object)$formdata;
+                }
+                if (!is_object($formdata)) {
+                    continue;
+                }
+
+                if (empty($formdata->stat_type) || (string)$formdata->stat_type !== 'actividades_aprendizaje') {
+                    continue;
+                }
+
+                $modalreportid = !empty($formdata->modalreportid) ? (int)$formdata->modalreportid : 0;
+                if ($modalreportid !== $targetreportid) {
+                    continue;
+                }
+
+                $selectedraw = !empty($formdata->selectedcmids) ? (string)$formdata->selectedcmids : '';
+                $selectedcmids = $this->parse_selected_cmids_csv($selectedraw);
+                if (!empty($selectedcmids)) {
+                    return $selectedcmids;
+                }
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Parses selected course-module ids from csv/whitespace list.
+     *
+     * @param string $selectedcmidsraw
+     * @return array<int>
+     */
+    protected function parse_selected_cmids_csv(string $selectedcmidsraw): array {
+        $selectedcmidsraw = trim($selectedcmidsraw);
+        if ($selectedcmidsraw === '') {
+            return [];
+        }
+
+        $parts = preg_split('/[\s,;]+/', $selectedcmidsraw, -1, PREG_SPLIT_NO_EMPTY);
+        if (empty($parts)) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($parts as $part) {
+            $id = (int)$part;
+            if ($id > 0) {
+                $ids[$id] = $id;
+            }
+        }
+
+        return array_values($ids);
+    }
+
+    /**
      * elements_by_conditions
      *
      * @param array $conditions
@@ -560,6 +917,7 @@ abstract class report_base {
         $filters = $components['filters']['elements'] ?? [];
         $columns = $components['columns']['elements'] ?? [];
         $ordering = $components['ordering']['elements'] ?? [];
+        $columns = $this->sync_scormadvancedgrades_progress_columns($columns);
 
         $finalelements = [];
 

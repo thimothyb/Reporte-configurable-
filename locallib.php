@@ -225,6 +225,126 @@ function cr_get_viewreport_request_params(array $excludekeys = []): array {
 }
 
 /**
+ * Returns the default access scope value for analytics reports.
+ *
+ * @return string
+ */
+function cr_get_access_scope_default(): string {
+    return 'courseplatform';
+}
+
+/**
+ * Returns available access scope options.
+ *
+ * @return array
+ */
+function cr_get_access_scope_options(): array {
+    return [
+        'courseonly' => get_string('filteraccessscope_courseonly', 'block_configurable_reports'),
+        'courseplatform' => get_string('filteraccessscope_courseplatform', 'block_configurable_reports'),
+    ];
+}
+
+/**
+ * Validates and normalizes access scope value.
+ *
+ * @param string $scope
+ * @return string
+ */
+function cr_get_access_scope(string $scope): string {
+    if (!array_key_exists($scope, cr_get_access_scope_options())) {
+        return cr_get_access_scope_default();
+    }
+
+    return $scope;
+}
+
+/**
+ * Returns translated label for access scope value.
+ *
+ * @param string $scope
+ * @return string
+ */
+function cr_get_access_scope_label(string $scope): string {
+    $scope = cr_get_access_scope($scope);
+    $options = cr_get_access_scope_options();
+
+    return $options[$scope];
+}
+
+/**
+ * Parses filter date selector request values into a timestamp.
+ *
+ * @param string $filterkey
+ * @return int|null
+ */
+function cr_get_filter_timestamp(string $filterkey): ?int {
+    if (!array_key_exists($filterkey, $_REQUEST)) {
+        return null;
+    }
+
+    $rawvalue = optional_param_array($filterkey, [], PARAM_RAW);
+    if (empty($rawvalue) || !isset($rawvalue['year'], $rawvalue['month'], $rawvalue['day'])) {
+        return null;
+    }
+
+    return make_timestamp(
+        (int) $rawvalue['year'],
+        (int) $rawvalue['month'],
+        (int) $rawvalue['day'],
+        isset($rawvalue['hour']) ? (int) $rawvalue['hour'] : 0,
+        isset($rawvalue['minute']) ? (int) $rawvalue['minute'] : 0
+    );
+}
+
+/**
+ * Metadata rows for export files based on current filter request.
+ *
+ * @return array
+ */
+function cr_get_export_metadata_rows(): array {
+    $hasscope = array_key_exists('filter_accessscope', $_REQUEST);
+    $hasstart = array_key_exists('filter_starttime', $_REQUEST);
+    $hasend = array_key_exists('filter_endtime', $_REQUEST);
+
+    if (!$hasscope && !$hasstart && !$hasend) {
+        return [];
+    }
+
+    $rows = [];
+    $rows[] = [
+        get_string('exportmetadata_generatedat', 'block_configurable_reports'),
+        userdate(time()),
+    ];
+
+    if ($hasscope) {
+        $scope = optional_param('filter_accessscope', cr_get_access_scope_default(), PARAM_ALPHA);
+        $rows[] = [
+            get_string('exportmetadata_scope', 'block_configurable_reports'),
+            cr_get_access_scope_label($scope),
+        ];
+    }
+
+    $starttime = cr_get_filter_timestamp('filter_starttime');
+    if ($starttime !== null) {
+        $rows[] = [
+            get_string('exportmetadata_startdate', 'block_configurable_reports'),
+            userdate($starttime),
+        ];
+    }
+
+    $endtime = cr_get_filter_timestamp('filter_endtime');
+    if ($endtime !== null) {
+        $rows[] = [
+            get_string('exportmetadata_enddate', 'block_configurable_reports'),
+            userdate($endtime),
+        ];
+    }
+
+    return $rows;
+}
+
+/**
  * Returns the cache used for rendered report data.
  *
  * @return cache
@@ -241,7 +361,7 @@ function cr_get_report_result_cache(): cache {
  * @return string
  */
 function cr_get_report_cache_revision(): string {
-    return '20260430_userstatsadvanced_messages_buttons';
+    return '20260608_report2_assignfills_v14';
 }
 
 /**

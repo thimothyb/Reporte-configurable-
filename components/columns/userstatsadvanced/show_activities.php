@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Learning activities detail view for userstatsadvanced.
+ * Learning activities vertical detail view for userstatsadvanced.
  *
  * @package    block_configurable_reports
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
@@ -25,6 +25,7 @@ require_once("../../../../../config.php");
 
 $courseid = required_param('courseid', PARAM_INT);
 $userid = required_param('userid', PARAM_INT);
+$reportid = optional_param('reportid', 0, PARAM_INT);
 $selectedcmidsraw = optional_param('filter_userstatsadvanced_selectedcmids', '', PARAM_RAW_TRIMMED);
 $selectedcmids = userstatsadvanced_show_activities_parse_selected_cmids($selectedcmidsraw);
 
@@ -35,7 +36,7 @@ if (!empty($targetuser->deleted)) {
 }
 
 // Force user login in course (SITE or Course).
-if ((int) $course->id === SITEID) {
+if ((int)$course->id === SITEID) {
     require_login();
     $context = context_system::instance();
 } else {
@@ -50,17 +51,13 @@ $url = new moodle_url('/blocks/configurable_reports/components/columns/userstats
 if ($selectedcmidsraw !== '') {
     $url->param('filter_userstatsadvanced_selectedcmids', implode(',', $selectedcmids));
 }
-$title = 'Actividades de aprendizaje';
-$params = [
-    'userid' => $userid,
-    'courseid' => $courseid,
-    'modname' => 'assign',
-];
-$selectedwhere = '';
-if (!empty($selectedcmids)) {
-    [$selectedinsql, $selectedinparams] = $DB->get_in_or_equal($selectedcmids, SQL_PARAMS_NAMED, 'selectedcmid');
-    $selectedwhere = " AND cm.id $selectedinsql";
-    $params = array_merge($params, $selectedinparams);
+
+$title = 'Detalle Actividades de aprendizaje';
+if ($reportid > 0) {
+    $report = $DB->get_record('block_configurable_reports', ['id' => $reportid], 'id,name', IGNORE_MISSING);
+    if (!empty($report->name)) {
+        $title = format_string((string)$report->name);
+    }
 }
 
 $PAGE->set_context($context);
@@ -69,45 +66,52 @@ $PAGE->set_url($url);
 $PAGE->set_title($title);
 $PAGE->set_heading(format_string($course->fullname));
 
-$activitysql = "SELECT cm.id AS coursemoduleid,
-                       a.name AS activityname,
-                       cmc.completionstate,
-                       cmc.timemodified
-                  FROM {course_modules} cm
-                  JOIN {modules} m
-                    ON m.id = cm.module
-                  JOIN {assign} a
-                    ON a.id = cm.instance
-             LEFT JOIN {course_modules_completion} cmc
-                    ON cmc.coursemoduleid = cm.id
-                   AND cmc.userid = :userid
-                 WHERE cm.course = :courseid
-                   AND m.name = :modname
-                   $selectedwhere
-              ORDER BY a.name ASC, cm.id ASC";
-$activities = $DB->get_records_sql($activitysql, $params);
+$activities = userstatsadvanced_show_activities_get_records($userid, $courseid, $selectedcmids);
+
+$total = count($activities);
+$completed = 0;
+foreach ($activities as $activity) {
+    if (!empty($activity->completed)) {
+        $completed++;
+    }
+}
+$percentage = ($total > 0) ? (($completed * 100) / $total) : 0.0;
+$percentagetext = (abs($percentage - round($percentage)) < 0.00001)
+    ? ((int)round($percentage)) . '.00%'
+    : format_float($percentage, 2) . '%';
+$summarytext = $percentagetext . ' (' . $completed . '/' . $total . ')';
 
 $table = new html_table();
 $table->attributes['class'] = 'generaltable table table-striped';
-$table->head = ['Actividad', 'Estado', 'Última actualización'];
+$table->head = ['Nombre y apellidos', strtoupper(fullname($targetuser))];
 $table->data = [];
 
-foreach ($activities as $activity) {
-    $state = ((int) $activity->completionstate > 0) ? 'Completada' : 'Pendiente';
-    $timemodified = (!empty($activity->timemodified)) ? userdate((int) $activity->timemodified) : '-';
+$table->data[] = ['Actividades de aprendizaje', $summarytext];
 
-    $table->data[] = [
-        format_string($activity->activityname),
-        $state,
-        $timemodified,
-    ];
+$index = 1;
+foreach ($activities as $activity) {
+    $activityname = strtoupper(trim((string)$activity->name));
+    if ($activityname === '') {
+        $activityname = 'ACTIVIDAD ' . $index;
+    }
+
+    $datelabel = 'FECHA DE ENTREGA ACTIVIDAD ' . $index . '. ' . $activityname;
+    $gradelabel = 'NOTA ACTIVIDAD ' . $index . '. ' . $activityname;
+
+    $datetext = (!empty($activity->displaydate))
+        ? userdate((int)$activity->displaydate, '%d/%m/%Y')
+        : '-';
+    $gradetext = userstatsadvanced_show_activities_format_grade($activity->finalgrade, $activity->grademax);
+
+    $table->data[] = [$gradelabel, $gradetext];
+    $table->data[] = [$datelabel, $datetext];
+    $index++;
 }
 
 echo $OUTPUT->header();
 echo $OUTPUT->heading($title);
-echo html_writer::div('Usuario: ' . fullname($targetuser), 'mb-3');
 
-if (empty($table->data)) {
+if (empty($activities)) {
     echo $OUTPUT->notification(get_string('norecordsfound', 'block_configurable_reports'));
 }
 
@@ -142,4 +146,131 @@ function userstatsadvanced_show_activities_parse_selected_cmids(string $selected
     }
 
     return array_values($ids);
+}
+
+/**
+ * Returns assignments records ordered by their position in the course.
+ *
+ * @param int $userid
+ * @param int $courseid
+ * @param array<int> $selectedcmids
+ * @return array
+ */
+function userstatsadvanced_show_activities_get_records(int $userid, int $courseid, array $selectedcmids = []): array {
+    global $DB;
+
+    $params = [
+        'courseid' => $courseid,
+        'modname' => 'assign',
+        'completionuserid' => $userid,
+        'gradeuserid' => $userid,
+        'submissionuserid' => $userid,
+        'submittedstatus' => 'submitted',
+    ];
+
+    $selectedwhere = '';
+    if (!empty($selectedcmids)) {
+        [$insql, $inparams] = $DB->get_in_or_equal($selectedcmids, SQL_PARAMS_NAMED, 'selectedcmid');
+        $selectedwhere = " AND cm.id $insql";
+        $params = array_merge($params, $inparams);
+    }
+
+    $sql = "SELECT cm.id AS coursemoduleid,
+                   cm.section,
+                   cm.added,
+                   a.name,
+                   a.duedate,
+                   cmc.completionstate,
+                   cmc.timemodified AS completiontime,
+                   gi.grademax,
+                   gg.finalgrade,
+                   gg.timemodified AS gradetime,
+                   MAX(CASE WHEN asu.status = :submittedstatus THEN asu.timemodified ELSE 0 END) AS submissiontime
+              FROM {course_modules} cm
+              JOIN {modules} m
+                ON m.id = cm.module
+              JOIN {assign} a
+                ON a.id = cm.instance
+         LEFT JOIN {course_modules_completion} cmc
+                ON cmc.coursemoduleid = cm.id
+               AND cmc.userid = :completionuserid
+         LEFT JOIN {grade_items} gi
+                ON gi.iteminstance = cm.instance
+               AND gi.itemmodule = m.name
+               AND gi.courseid = cm.course
+               AND gi.itemtype = 'mod'
+         LEFT JOIN {grade_grades} gg
+                ON gg.itemid = gi.id
+               AND gg.userid = :gradeuserid
+         LEFT JOIN {assign_submission} asu
+                ON asu.assignment = a.id
+               AND asu.userid = :submissionuserid
+             WHERE cm.course = :courseid
+               AND cm.visible = 1
+               AND m.name = :modname
+               $selectedwhere
+          GROUP BY cm.id,
+                   cm.section,
+                   cm.added,
+                   a.name,
+                   a.duedate,
+                   cmc.completionstate,
+                   cmc.timemodified,
+                   gi.grademax,
+                   gg.finalgrade,
+                   gg.timemodified
+          ORDER BY cm.section ASC, cm.added ASC, cm.id ASC";
+    $records = $DB->get_records_sql($sql, $params);
+
+    $result = [];
+    foreach ($records as $record) {
+        $record->completed = (!empty($record->completionstate) && (int)$record->completionstate > 0);
+
+        $displaydate = 0;
+        if (!empty($record->submissiontime)) {
+            $displaydate = (int)$record->submissiontime;
+        } else if (!empty($record->duedate)) {
+            $displaydate = (int)$record->duedate;
+        } else if (!empty($record->completiontime)) {
+            $displaydate = (int)$record->completiontime;
+        } else if (!empty($record->gradetime)) {
+            $displaydate = (int)$record->gradetime;
+        }
+        $record->displaydate = $displaydate;
+
+        if (empty($record->name)) {
+            $record->name = 'Actividad';
+        }
+        $result[] = $record;
+    }
+
+    return $result;
+}
+
+/**
+ * Formats a grade as a percentage string.
+ *
+ * @param mixed $finalgrade
+ * @param mixed $grademax
+ * @return string
+ */
+function userstatsadvanced_show_activities_format_grade($finalgrade, $grademax): string {
+    if ($finalgrade === null || $finalgrade === '' || $finalgrade === false) {
+        return '-';
+    }
+
+    $grademaxvalue = (float)$grademax;
+    $finalgradevalue = (float)$finalgrade;
+    if ($grademaxvalue <= 0) {
+        return format_float($finalgradevalue, 2);
+    }
+
+    $percentage = ($finalgradevalue * 100) / $grademaxvalue;
+    $percentage = max(0.0, min(100.0, $percentage));
+
+    if (abs($percentage - round($percentage)) < 0.00001) {
+        return ((int)round($percentage)) . '.00%';
+    }
+
+    return format_float($percentage, 2) . '%';
 }

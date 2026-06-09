@@ -35,6 +35,11 @@ defined('BLOCK_CONFIGURABLE_REPORTS_MAX_RECORDS') || define('BLOCK_CONFIGURABLE_
 class report_sql extends report_base {
 
     /**
+     * Scope key for course + platform activity.
+     */
+    private const ACCESS_SCOPE_COURSEPLATFORM = 'courseplatform';
+
+    /**
      * @var bool
      */
     private bool $forexport = false;
@@ -78,7 +83,7 @@ class report_sql extends report_base {
      * prepare_sql
      *
      * @param string $sql
-     * @return array|string|string[]
+     * @return string
      */
     public function prepare_sql(string $sql) {
         global $USER, $CFG, $COURSE;
@@ -94,6 +99,55 @@ class report_sql extends report_base {
             $sql = str_replace('%%FILTER_VAR%%', $filtervar, $sql);
         }
 
+        $scope = $this->get_requested_access_scope();
+        [$academicstart, $academicend] = $this->get_course_academic_range((int) $COURSE->startdate, (int) ($COURSE->enddate ?? 0));
+        [$starttime, $endtime] = $this->get_requested_time_range($academicstart, $academicend);
+        $scopeliteral = "'" . str_replace("'", "''", $scope) . "'";
+        $scopelabelliteral = "'" . str_replace("'", "''", cr_get_access_scope_label($scope)) . "'";
+
+        // SQL helper placeholders for access analytics reports.
+        $sql = str_replace('%%ACCESS_SCOPE%%', $scopeliteral, $sql);
+        $sql = str_replace('%%ACCESS_SCOPE_LABEL%%', $scopelabelliteral, $sql);
+
+        $sql = preg_replace_callback('/%%FILTER_ACCESSSCOPE_COURSEID:([^%]+)%%/i', function($matches) use ($COURSE, $scope) {
+            $field = trim($matches[1]);
+            if ($field === '') {
+                return '';
+            }
+
+            return ' AND ' . $this->build_scope_condition($field, (int) $COURSE->id, $scope);
+        }, $sql);
+
+        $sql = preg_replace_callback('/%%ACCESS_SOURCE_EXPR:([^%]+)%%/i', function($matches) {
+            $field = trim($matches[1]);
+            if ($field === '') {
+                return "'course'";
+            }
+
+            return "CASE WHEN {$field} = 0 THEN 'platform' ELSE 'course' END";
+        }, $sql);
+
+        $sql = preg_replace_callback('/%%ACCESS_EVENTTYPE_EXPR:([^%]+)%%/i', function($matches) {
+            $field = trim($matches[1]);
+            if ($field === '') {
+                return "'activity'";
+            }
+
+            return "CASE " .
+                "WHEN {$field} LIKE '%user_loggedin' THEN 'login' " .
+                "WHEN {$field} LIKE '%user_loggedout' THEN 'logout' " .
+                "ELSE 'activity' END";
+        }, $sql);
+
+        $sql = preg_replace_callback('/%%FILTER_ACADEMICPERIOD:([^%]+)%%/i', function($matches) use ($academicstart, $academicend) {
+            $field = trim($matches[1]);
+            if ($field === '') {
+                return '';
+            }
+
+            return " AND {$field} >= {$academicstart} AND {$field} <= {$academicend}";
+        }, $sql);
+
         // See http://en.wikipedia.org/wiki/Year_2038_problem.
         $sql = str_replace([
             '%%USERID%%',
@@ -101,13 +155,102 @@ class report_sql extends report_base {
             '%%CATEGORYID%%',
             '%%STARTTIME%%',
             '%%ENDTIME%%',
+            '%%ACADEMIC_STARTTIME%%',
+            '%%ACADEMIC_ENDTIME%%',
             '%%WWWROOT%%',
         ],
-            [$USER->id, $COURSE->id, $COURSE->category, '0', '2145938400', $CFG->wwwroot],
+            [
+                $USER->id,
+                $COURSE->id,
+                $COURSE->category,
+                (string) $starttime,
+                (string) $endtime,
+                (string) $academicstart,
+                (string) $academicend,
+                $CFG->wwwroot,
+            ],
             $sql);
         $sql = preg_replace('/%{2}[^%]+%{2}/i', '', $sql);
 
         return str_replace('?', '[[QUESTIONMARK]]', $sql);
+    }
+
+    /**
+     * Returns validated access scope from filter request.
+     *
+     * @return string
+     */
+    private function get_requested_access_scope(): string {
+        $scope = optional_param('filter_accessscope', cr_get_access_scope_default(), PARAM_ALPHA);
+        return cr_get_access_scope($scope);
+    }
+
+    /**
+     * Returns selected filter date range as unix timestamps.
+     *
+     * @return array
+     */
+    private function get_requested_time_range(int $defaultstarttime = 0, int $defaultendtime = 2145938400): array {
+        $starttime = $defaultstarttime;
+        $endtime = $defaultendtime;
+
+        $filterstarttime = optional_param_array('filter_starttime', [], PARAM_RAW);
+        $filterendtime = optional_param_array('filter_endtime', [], PARAM_RAW);
+
+        if (!empty($filterstarttime) && !empty($filterendtime) &&
+            isset($filterstarttime['year'], $filterstarttime['month'], $filterstarttime['day']) &&
+            isset($filterendtime['year'], $filterendtime['month'], $filterendtime['day'])) {
+            $starttime = make_timestamp(
+                $filterstarttime['year'],
+                $filterstarttime['month'],
+                $filterstarttime['day'],
+                $filterstarttime['hour'] ?? 0,
+                $filterstarttime['minute'] ?? 0
+            );
+            $endtime = make_timestamp(
+                $filterendtime['year'],
+                $filterendtime['month'],
+                $filterendtime['day'],
+                $filterendtime['hour'] ?? 0,
+                $filterendtime['minute'] ?? 0
+            );
+        }
+
+        return [$starttime, $endtime];
+    }
+
+    /**
+     * Builds SQL condition for selected access scope.
+     *
+     * @param string $courseidfield
+     * @param int $courseid
+     * @param string $scope
+     * @return string
+     */
+    private function build_scope_condition(string $courseidfield, int $courseid, string $scope): string {
+        if ($scope === self::ACCESS_SCOPE_COURSEPLATFORM) {
+            return "({$courseidfield} = {$courseid} OR {$courseidfield} = 0)";
+        }
+
+        return "{$courseidfield} = {$courseid}";
+    }
+
+    /**
+     * Course academic period range.
+     *
+     * @param int $coursestart
+     * @param int $courseend
+     * @return array
+     */
+    private function get_course_academic_range(int $coursestart, int $courseend): array {
+        $start = max(0, $coursestart);
+        $end = ($courseend > 0) ? $courseend : 2145938400;
+
+        if ($end < $start) {
+            return [$start, 2145938400];
+        }
+
+        return [$start, $end];
     }
 
     /**

@@ -282,6 +282,23 @@ $string['scormadvancedgrades_format_text'] = 'Text';
 $string['scormadvancedgrades_format_number'] = 'Number';
 $string['scormadvancedgrades_format_percent'] = 'Percentage';
 $string['scormadvancedgrades_format_datetime'] = 'Date';
+$string['scormadvancedgrades_addmultiplecolumns'] = 'Add multiple columns';
+$string['scormadvancedgrades_addmultiple_title'] = 'Add multiple columns';
+$string['scormadvancedgrades_addmultiple_intro'] = 'Select global columns and quizzes to automatically generate statistics.';
+$string['scormadvancedgrades_addmultiple_quizsection'] = 'Quizzes';
+$string['scormadvancedgrades_addmultiple_addquizcompletiondate'] = 'Add completion date for all quizzes';
+$string['scormadvancedgrades_addmultiple_addquizscore'] = 'Add score for all quizzes';
+$string['scormadvancedgrades_addmultiple_addquizdedicationtime'] = 'Add dedication time for all quizzes';
+$string['scormadvancedgrades_addmultiple_addquizopendate'] = 'Add opening date for all quizzes';
+$string['scormadvancedgrades_addmultiple_addquizfirstpassattempt'] = 'Add first passed attempt for all quizzes';
+$string['scormadvancedgrades_addmultiple_selectcol'] = 'Select';
+$string['scormadvancedgrades_addmultiple_activitycol'] = 'Activity';
+$string['scormadvancedgrades_addmultiple_selectall'] = 'Select all';
+$string['scormadvancedgrades_addmultiple_clearall'] = 'Clear selection';
+$string['scormadvancedgrades_addmultiple_saved'] = 'Columns were added successfully.';
+$string['scormadvancedgrades_addmultiple_noselection'] = 'You must select at least one activity.';
+$string['scormadvancedgrades_addmultiple_nometrics'] = 'You must select at least one column option.';
+$string['scormadvancedgrades_addmultiple_fallbackname'] = 'Activity {$a}';
 
 $string['currentuser'] = "Current user";
 $string['currentuser_summary'] = "The user that is viewing the report";
@@ -292,6 +309,10 @@ $string['puserfield_summary'] = "User with the selected value in the selected fi
 $string['startendtime'] = "Start / End date filter";
 $string['starttime'] = "Start date";
 $string['endtime'] = "End date";
+$string['filteraccessscope'] = 'Access scope';
+$string['filteraccessscope_summary'] = 'Switch between only course events and course + platform events';
+$string['filteraccessscope_courseonly'] = 'Course only';
+$string['filteraccessscope_courseplatform'] = 'Course + platform (courseid = 0)';
 
 $string['template'] = "Template";
 $string['availablemarks'] = "Available marks";
@@ -327,7 +348,20 @@ $string['queryfailed'] = 'Query failed <code><pre>{$a}</pre></code>';
 $string['norowsreturned'] = "No rows returned";
 
 $string['listofsqlreports'] = 'Press F11 when cursor is in the editor to toggle full screen editing. Esc can also be used to exit
-full screen editing.<br/><br/><a href="http://docs.moodle.org/en/ad-hoc_contributed_reports" target="_blank">List of SQL Contributed reports</a>';
+full screen editing.<br/><br/>SQL helper placeholders for access analytics:<br/>
+<code>%%FILTER_ACCESSSCOPE_COURSEID:log.courseid%%</code> (use with Access scope filter)<br/>
+<code>%%ACCESS_SOURCE_EXPR:log.courseid%%</code> (returns course/platform)<br/>
+<code>%%ACCESS_EVENTTYPE_EXPR:log.eventname%%</code> (returns login/logout/activity)<br/>
+<code>%%ACCESS_SCOPE%%</code> and <code>%%ACCESS_SCOPE_LABEL%%</code> (SQL string literals)<br/>
+<code>%%STARTTIME%%</code> and <code>%%ENDTIME%%</code> (filled automatically when Start/End filter is present)<br/><br/>
+<code>%%ACADEMIC_STARTTIME%%</code> and <code>%%ACADEMIC_ENDTIME%%</code> (course period from course settings)<br/>
+<code>%%FILTER_ACADEMICPERIOD:log.timecreated%%</code> (injects an AND clause using course period)<br/><br/>
+<a href="http://docs.moodle.org/en/ad-hoc_contributed_reports" target="_blank">List of SQL Contributed reports</a>';
+
+$string['exportmetadata_generatedat'] = 'Generated at';
+$string['exportmetadata_scope'] = 'Access scope';
+$string['exportmetadata_startdate'] = 'Start date';
+$string['exportmetadata_enddate'] = 'End date';
 
 $string['usersincoursereport_summary'] = "Any user in the current report course";
 
@@ -361,6 +395,7 @@ $string['userstatsadvanced_actividades_aprendizaje'] = 'Learning activities (com
 $string['userstatsadvanced_actividades_aprendizaje_moodle_completion'] = 'Completed assignments / Total (Moodle completion criterion)';
 $string['userstatsadvanced_evaluaciones'] = 'Assessments (completed / total)';
 $string['userstatsadvanced_contenidos_visualizados'] = 'Viewed content (overall progress)';
+$string['userstatsadvanced_recursos_completados'] = 'Completed resources / Total';
 $string['userstatsadvanced_correos'] = 'Messages with teachers';
 $string['userstatsadvanced_mensajes_alumnos'] = 'Messages with students';
 $string['userstatsadvanced_registros'] = 'Log records';
@@ -402,6 +437,7 @@ $string['userstatsadvanced_forum'] = 'Forum';
 $string['userstatsadvanced_subject'] = 'Subject';
 $string['userstatsadvanced_message'] = 'Message';
 $string['userstatsadvanced_created'] = 'Created';
+$string['userstatsadvanced_students_group'] = 'Students';
 $string['userstatsadvanced_user_label'] = 'User';
 $string['userstatsadvanced_no_subject'] = '-';
 $string['userstatsadvanced_deleted_message'] = 'Deleted message';
@@ -411,8 +447,10 @@ $string['userstatsadvanced_selected_quizzes_count'] = 'Selected quizzes: {$a}';
 $string['userstatsadvanced_elements_filter_default_quizzes'] = 'Course access and quizzes';
 $string['userstatsadvanced_select_tasks'] = 'Select assignments';
 $string['userstatsadvanced_select_tasks_help'] = 'If you do not select assignments, all visible assignments in the course will be used.';
+$string['userstatsadvanced_select_completed_resources_help'] = 'If you do not select items, all completed resources in the course will be used.';
 $string['userstatsadvanced_selected_tasks_count'] = 'Selected assignments: {$a}';
 $string['userstatsadvanced_elements_filter_default_tasks'] = 'Course access and assignments';
+$string['userstatsadvanced_elements_filter_default_completed_resources'] = 'All completed resources in the course will be used.';
 $string['stat'] = 'Statistic';
 $string['statslogins'] = 'Logins in the platform';
 $string['activityview'] = 'Activity views';

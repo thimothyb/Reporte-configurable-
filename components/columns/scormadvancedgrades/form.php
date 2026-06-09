@@ -34,6 +34,35 @@ require_once($CFG->libdir . '/formslib.php');
 class scormadvancedgrades_form extends moodleform {
 
     /**
+     * Returns localized string if available; otherwise fallback text.
+     *
+     * @param string $identifier
+     * @param string $fallback
+     * @return string
+     */
+    protected function get_localized_label(string $identifier, string $fallback): string {
+        $stringmanager = get_string_manager();
+        if ($stringmanager->string_exists($identifier, 'block_configurable_reports')) {
+            return get_string($identifier, 'block_configurable_reports');
+        }
+        return $fallback;
+    }
+
+    /**
+     * Returns popup URL for adding multiple progress columns.
+     *
+     * @return string
+     */
+    protected function get_add_multiple_popup_url(): string {
+        $params = [
+            'id' => !empty($this->_customdata['id']) ? (int)$this->_customdata['id'] : 0,
+        ];
+
+        $url = new moodle_url('/blocks/configurable_reports/components/columns/scormadvancedgrades/addmultiple.php', $params);
+        return $url->out(false);
+    }
+
+    /**
      * Form definition.
      *
      * @return void
@@ -45,6 +74,24 @@ class scormadvancedgrades_form extends moodleform {
 
         // Main statistics selector + format selector.
         $this->_customdata['pluginclass']->add_stat_selector_to_form($mform);
+
+        // Requested UX: keep format visible but locked to percentage by default.
+        $mform->setDefault('format', 'percent');
+        if ($mform->elementExists('format')) {
+            $mform->hardFreeze('format');
+        }
+
+        $popupurljson = json_encode($this->get_add_multiple_popup_url());
+        $openpopupjs = "(function(){\n" .
+            "  var popupurl = " . $popupurljson . ";\n" .
+            "  window.open(popupurl, 'scormadvancedgrades_addmultiple', 'width=1200,height=780,scrollbars=yes,resizable=yes');\n" .
+            "})(); return false;";
+        $mform->addElement(
+            'button',
+            'addmultiplecolumnsbutton',
+            $this->get_localized_label('scormadvancedgrades_addmultiplecolumns', 'Añadir varias columnas'),
+            ['type' => 'button', 'onclick' => $openpopupjs]
+        );
 
         // Common column configuration (name, align, size, wrap).
         $this->_customdata['compclass']->add_form_elements($mform, $this);

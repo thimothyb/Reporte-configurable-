@@ -34,20 +34,32 @@ function export_report($report) {
     require_once($CFG->libdir . '/csvlib.class.php');
 
     $table = $report->table;
-
     $matrix = [];
     $filename = format_string($report->name) ?? 'report';
+    $rowindex = 0;
+
+    $metadatarows = cr_get_export_metadata_rows();
+    if (!empty($metadatarows)) {
+        foreach ($metadatarows as $metarow) {
+            $matrix[$rowindex] = array_values($metarow);
+            $rowindex++;
+        }
+        // Visual separator between metadata and report data.
+        $matrix[$rowindex] = [];
+        $rowindex++;
+    }
 
     if (!empty($table->head)) {
         foreach ($table->head as $key => $heading) {
-            $matrix[0][$key] = str_replace("\n", ' ', htmlspecialchars_decode(strip_tags(nl2br(format_string($heading)))));
+            $matrix[$rowindex][$key] = str_replace("\n", ' ', htmlspecialchars_decode(strip_tags(nl2br(format_string($heading)))));
         }
+        $rowindex++;
     }
 
     if (!empty($table->data)) {
         foreach ($table->data as $rkey => $row) {
             foreach ($row as $key => $item) {
-                $matrix[$rkey + 1][$key] = str_replace("\n", ' ', htmlspecialchars_decode(strip_tags(nl2br(format_string($item)))));
+                $matrix[$rkey + $rowindex][$key] = str_replace("\n", ' ', htmlspecialchars_decode(strip_tags(nl2br(format_string($item)))));
             }
         }
     }

@@ -256,7 +256,7 @@ if (!$download) {
             );
         }
 
-        if ($usingcachedreportdata) {
+        if ($usingcachedreportdata && !$refreshed) {
             $refreshparams = array_merge(
                 ['id' => $id, 'courseid' => $courseid],
                 cr_get_viewreport_request_params(['refresh', 'refreshed', 'download', 'format', 'sesskey'])

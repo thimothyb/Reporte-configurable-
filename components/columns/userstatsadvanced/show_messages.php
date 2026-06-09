@@ -163,12 +163,14 @@ function userstatsadvanced_show_messages_get_direct_records(
 ): array {
     global $DB;
 
-    $targetarchetypes = userstatsadvanced_show_messages_get_target_archetypes($stattype);
-    $targetids = userstatsadvanced_show_messages_get_course_user_ids_by_archetypes($courseid, $targetarchetypes, $userid);
-    if (empty($targetids)) {
-        return [];
+    if ($stattype === 'correos') {
+        $targetids = userstatsadvanced_show_messages_get_target_ids_for_correos($courseid, $userid);
+    } else {
+        $targetarchetypes = userstatsadvanced_show_messages_get_target_archetypes($stattype);
+        $targetids = userstatsadvanced_show_messages_get_course_user_ids_by_archetypes($courseid, $targetarchetypes, $userid);
     }
 
+    $directrecords = [];
     $dbman = $DB->get_manager();
     $sources = [];
     if ($dbman->table_exists('message_messages') && $dbman->table_exists('message_conversation_members')) {
@@ -181,23 +183,71 @@ function userstatsadvanced_show_messages_get_direct_records(
         $sources[] = ['type' => 'conversation', 'table' => 'messages'];
     }
 
-    foreach ($sources as $source) {
-        if ($source['type'] === 'conversation') {
-            $records = userstatsadvanced_show_messages_get_conversation_records(
-                $source['table'],
-                $userid,
-                $targetids,
-                $context
-            );
-        } else {
-            $records = userstatsadvanced_show_messages_get_legacy_records($source['table'], $userid, $targetids, $context);
-        }
-        if (!empty($records)) {
-            return $records;
+    if (!empty($targetids)) {
+        foreach ($sources as $source) {
+            if ($source['type'] === 'conversation') {
+                $records = userstatsadvanced_show_messages_get_conversation_records(
+                    $source['table'],
+                    $userid,
+                    $targetids,
+                    $context
+                );
+            } else {
+                $records = userstatsadvanced_show_messages_get_legacy_records($source['table'], $userid, $targetids, $context);
+            }
+            if (!empty($records)) {
+                $directrecords = $records;
+                break;
+            }
         }
     }
 
-    return [];
+    if ($stattype === 'correos') {
+        $forumrecords = userstatsadvanced_show_messages_get_staff_forum_mail_records($userid, $courseid, $context);
+        return userstatsadvanced_show_messages_merge_records_by_date($directrecords, $forumrecords);
+    }
+
+    if ($stattype === 'mensajes_alumnos') {
+        $forumrecords = userstatsadvanced_show_messages_get_forum_records_with_students($userid, $courseid, $context);
+        return userstatsadvanced_show_messages_merge_records_by_date($directrecords, $forumrecords);
+    }
+
+    return $directrecords;
+}
+
+/**
+ * Returns target user IDs for "correos" metric detail.
+ *
+ * @param int $courseid
+ * @param int $excludeuserid
+ * @return array
+ */
+function userstatsadvanced_show_messages_get_target_ids_for_correos(int $courseid, int $excludeuserid = 0): array {
+    $targetids = userstatsadvanced_show_messages_get_course_user_ids_by_archetypes(
+        $courseid,
+        ['editingteacher', 'teacher', 'manager'],
+        $excludeuserid
+    );
+    $targetids = array_merge(
+        $targetids,
+        userstatsadvanced_show_messages_get_course_nonstudent_user_ids($courseid, $excludeuserid)
+    );
+    $targetids = array_merge($targetids, userstatsadvanced_show_messages_get_course_staff_user_ids_by_capability(
+        $courseid,
+        $excludeuserid
+    ));
+
+    if (empty($targetids)) {
+        return [];
+    }
+
+    $targetids = array_map('intval', $targetids);
+    $targetids = array_filter($targetids, static function(int $id): bool {
+        return $id > 0;
+    });
+    $targetids = array_values(array_unique($targetids));
+
+    return $targetids;
 }
 
 /**
@@ -301,6 +351,7 @@ function userstatsadvanced_show_messages_get_conversation_records(
             ),
             'messagehtml' => userstatsadvanced_show_messages_render_direct_message_html($row, $context),
             'createdhtml' => userstatsadvanced_show_messages_render_created_html((int)$row->timecreated),
+            'createdts' => (int)$row->timecreated,
         ];
     }
 
@@ -391,6 +442,7 @@ function userstatsadvanced_show_messages_get_legacy_records(
             ),
             'messagehtml' => userstatsadvanced_show_messages_render_direct_message_html($row, $context),
             'createdhtml' => userstatsadvanced_show_messages_render_created_html((int)$row->timecreated),
+            'createdts' => (int)$row->timecreated,
         ];
     }
 
@@ -451,6 +503,164 @@ function userstatsadvanced_show_messages_get_forum_records(int $userid, int $cou
             'subject' => $subject,
             'messagehtml' => userstatsadvanced_show_messages_render_forum_message_html($row, $context),
             'createdhtml' => userstatsadvanced_show_messages_render_created_html((int)$row->timecreated),
+            'createdts' => (int)$row->timecreated,
+        ];
+    }
+
+    return $records;
+}
+
+/**
+ * Returns staff/admin forum posts as fallback detail rows for "correos".
+ *
+ * @param int $userid
+ * @param int $courseid
+ * @param context $context
+ * @return array
+ */
+function userstatsadvanced_show_messages_get_staff_forum_mail_records(
+    int $userid,
+    int $courseid,
+    context $context
+): array {
+    global $DB;
+
+    $targetids = userstatsadvanced_show_messages_get_target_ids_for_correos($courseid, $userid);
+    if (empty($targetids)) {
+        return [];
+    }
+
+    [$insql, $inparams] = $DB->get_in_or_equal($targetids, SQL_PARAMS_NAMED, 'mailstaff');
+    $columns = userstatsadvanced_show_messages_get_table_columns('forum_posts');
+    $selectfields = [
+        'fp.id',
+        'fp.userid AS useridfrom',
+        'fp.created AS timecreated',
+        userstatsadvanced_show_messages_optional_column_sql($columns, 'subject', "''", 'fp'),
+        userstatsadvanced_show_messages_optional_column_sql($columns, 'message', "''", 'fp'),
+        userstatsadvanced_show_messages_optional_column_sql($columns, 'messageformat', '0', 'fp'),
+        userstatsadvanced_show_messages_optional_column_sql($columns, 'deleted', '0', 'fp'),
+    ];
+
+    $params = array_merge([
+        'courseid' => $courseid,
+        'userid' => $userid,
+    ], $inparams);
+
+    $sql = "SELECT " . implode(",\n                       ", $selectfields) . "
+              FROM {forum_posts} fp
+              JOIN {forum_discussions} fd ON fd.id = fp.discussion
+              JOIN {forum} f ON f.id = fd.forum
+             WHERE f.course = :courseid
+               AND fp.userid $insql
+               AND fp.userid <> :userid
+          ORDER BY fp.created DESC, fp.id DESC";
+    $rows = $DB->get_records_sql($sql, $params);
+    if (empty($rows)) {
+        return [];
+    }
+
+    $userids = [$userid => $userid];
+    foreach ($rows as $row) {
+        $fromuserid = (int)$row->useridfrom;
+        if ($fromuserid > 0) {
+            $userids[$fromuserid] = $fromuserid;
+        }
+    }
+    $users = userstatsadvanced_show_messages_get_users_map($userids);
+
+    $records = [];
+    foreach ($rows as $row) {
+        $records[] = [
+            'fromname' => userstatsadvanced_show_messages_get_user_name($users, (int)$row->useridfrom),
+            'toname' => userstatsadvanced_show_messages_get_user_name($users, $userid),
+            'subject' => userstatsadvanced_show_messages_resolve_subject(
+                (string)$row->subject,
+                '',
+                (string)$row->message
+            ),
+            'messagehtml' => userstatsadvanced_show_messages_render_forum_message_html($row, $context),
+            'createdhtml' => userstatsadvanced_show_messages_render_created_html((int)$row->timecreated),
+            'createdts' => (int)$row->timecreated,
+        ];
+    }
+
+    return $records;
+}
+
+/**
+ * Returns forum records authored by the selected user in discussions with students.
+ * Falls back to all authored forum records when student mapping is unavailable.
+ *
+ * @param int $userid
+ * @param int $courseid
+ * @param context $context
+ * @return array
+ */
+function userstatsadvanced_show_messages_get_forum_records_with_students(
+    int $userid,
+    int $courseid,
+    context $context
+): array {
+    global $DB;
+
+    if ($courseid <= 0 || $userid <= 0) {
+        return [];
+    }
+
+    $studentids = userstatsadvanced_show_messages_get_course_user_ids_by_archetypes($courseid, ['student'], $userid);
+    if (empty($studentids)) {
+        return userstatsadvanced_show_messages_get_forum_records($userid, $courseid, $context);
+    }
+
+    [$insql, $inparams] = $DB->get_in_or_equal($studentids, SQL_PARAMS_NAMED, 'studetail');
+    $columns = userstatsadvanced_show_messages_get_table_columns('forum_posts');
+    $selectfields = [
+        'fp.id',
+        'fp.userid AS useridfrom',
+        'fp.created AS timecreated',
+        userstatsadvanced_show_messages_optional_column_sql($columns, 'subject', "''", 'fp'),
+        userstatsadvanced_show_messages_optional_column_sql($columns, 'message', "''", 'fp'),
+        userstatsadvanced_show_messages_optional_column_sql($columns, 'messageformat', '0', 'fp'),
+        userstatsadvanced_show_messages_optional_column_sql($columns, 'deleted', '0', 'fp'),
+    ];
+    $params = array_merge([
+        'courseid' => $courseid,
+        'userid' => $userid,
+    ], $inparams);
+
+    $sql = "SELECT " . implode(",\n                       ", $selectfields) . "
+              FROM {forum_posts} fp
+              JOIN {forum_discussions} fd ON fd.id = fp.discussion
+              JOIN {forum} f ON f.id = fd.forum
+             WHERE f.course = :courseid
+               AND fp.userid = :userid
+               AND EXISTS (
+                    SELECT 1
+                      FROM {forum_posts} fps
+                     WHERE fps.discussion = fp.discussion
+                       AND fps.userid $insql
+             )
+          ORDER BY fp.created DESC, fp.id DESC";
+    $rows = $DB->get_records_sql($sql, $params);
+    if (empty($rows)) {
+        return [];
+    }
+
+    $users = userstatsadvanced_show_messages_get_users_map([$userid]);
+    $records = [];
+    foreach ($rows as $row) {
+        $records[] = [
+            'fromname' => userstatsadvanced_show_messages_get_user_name($users, (int)$row->useridfrom),
+            'toname' => get_string('userstatsadvanced_students_group', 'block_configurable_reports'),
+            'subject' => userstatsadvanced_show_messages_resolve_subject(
+                (string)$row->subject,
+                '',
+                (string)$row->message
+            ),
+            'messagehtml' => userstatsadvanced_show_messages_render_forum_message_html($row, $context),
+            'createdhtml' => userstatsadvanced_show_messages_render_created_html((int)$row->timecreated),
+            'createdts' => (int)$row->timecreated,
         ];
     }
 
@@ -476,18 +686,20 @@ function userstatsadvanced_show_messages_get_course_user_ids_by_archetypes(
         return [];
     }
 
+    $contextids = userstatsadvanced_show_messages_get_course_related_context_ids($courseid);
+    if (empty($contextids)) {
+        return [];
+    }
+
     [$insql, $inparams] = $DB->get_in_or_equal($archetypes, SQL_PARAMS_NAMED, 'arc');
-    $params = array_merge([
-        'contextlevel' => CONTEXT_COURSE,
-        'courseid' => $courseid,
-    ], $inparams);
+    [$ctxinsql, $ctxparams] = $DB->get_in_or_equal($contextids, SQL_PARAMS_NAMED, 'ctxid');
+    $params = array_merge($inparams, $ctxparams);
 
     $sql = "SELECT DISTINCT ra.userid
               FROM {role_assignments} ra
               JOIN {context} ctx ON ctx.id = ra.contextid
               JOIN {role} r ON r.id = ra.roleid
-             WHERE ctx.contextlevel = :contextlevel
-               AND ctx.instanceid = :courseid
+             WHERE ctx.id $ctxinsql
                AND r.archetype $insql";
     $rows = $DB->get_records_sql($sql, $params);
 
@@ -496,6 +708,155 @@ function userstatsadvanced_show_messages_get_course_user_ids_by_archetypes(
         $candidateid = (int)$row->userid;
         if ($candidateid > 0 && $candidateid !== $excludeuserid) {
             $userids[$candidateid] = $candidateid;
+        }
+    }
+
+    return array_values($userids);
+}
+
+/**
+ * Returns context IDs relevant for a course role lookup (course + parent contexts).
+ *
+ * @param int $courseid
+ * @return array
+ */
+function userstatsadvanced_show_messages_get_course_related_context_ids(int $courseid): array {
+    global $DB;
+
+    if ($courseid <= 0) {
+        return [];
+    }
+
+    $coursecontext = $DB->get_record('context', [
+        'contextlevel' => CONTEXT_COURSE,
+        'instanceid' => $courseid,
+    ], 'id,path', IGNORE_MISSING);
+    if (!$coursecontext) {
+        return [];
+    }
+
+    $contextids = [];
+    if (!empty($coursecontext->path)) {
+        foreach (explode('/', trim((string)$coursecontext->path, '/')) as $chunk) {
+            $id = (int)$chunk;
+            if ($id > 0) {
+                $contextids[$id] = $id;
+            }
+        }
+    }
+
+    $coursecontextid = (int)$coursecontext->id;
+    if ($coursecontextid > 0) {
+        $contextids[$coursecontextid] = $coursecontextid;
+    }
+
+    return array_values($contextids);
+}
+
+/**
+ * Returns non-student role user IDs assigned directly in the course context.
+ *
+ * @param int $courseid
+ * @param int $excludeuserid
+ * @return array
+ */
+function userstatsadvanced_show_messages_get_course_nonstudent_user_ids(
+    int $courseid,
+    int $excludeuserid = 0
+): array {
+    global $DB;
+
+    $contextids = userstatsadvanced_show_messages_get_course_related_context_ids($courseid);
+    if (empty($contextids)) {
+        return [];
+    }
+
+    [$ctxinsql, $ctxparams] = $DB->get_in_or_equal($contextids, SQL_PARAMS_NAMED, 'ctxnonstd');
+    $sql = "SELECT DISTINCT ra.userid
+              FROM {role_assignments} ra
+              JOIN {context} ctx ON ctx.id = ra.contextid
+              JOIN {role} r ON r.id = ra.roleid
+             WHERE ctx.id $ctxinsql
+               AND (r.archetype IS NULL OR r.archetype = '' OR r.archetype <> :studentarchetype)";
+    $rows = $DB->get_records_sql($sql, array_merge($ctxparams, [
+        'studentarchetype' => 'student',
+    ]));
+    if (empty($rows)) {
+        return [];
+    }
+
+    $userids = [];
+    foreach ($rows as $row) {
+        $candidateid = (int)$row->userid;
+        if ($candidateid > 0 && $candidateid !== $excludeuserid) {
+            $userids[$candidateid] = $candidateid;
+        }
+    }
+
+    return array_values($userids);
+}
+
+/**
+ * Returns staff users enrolled in the course with editing capability.
+ *
+ * @param int $courseid
+ * @param int $excludeuserid
+ * @return array
+ */
+function userstatsadvanced_show_messages_get_course_staff_user_ids_by_capability(
+    int $courseid,
+    int $excludeuserid = 0
+): array {
+    if ($courseid <= 0) {
+        return [];
+    }
+
+    try {
+        $context = context_course::instance($courseid);
+    } catch (Throwable $t) {
+        return [];
+    }
+    if (!$context) {
+        return [];
+    }
+
+    $users = get_enrolled_users($context, 'moodle/course:update', 0, 'u.id');
+    if (empty($users)) {
+        return [];
+    }
+
+    $userids = [];
+    foreach ($users as $user) {
+        $id = (int)($user->id ?? 0);
+        if ($id > 0 && $id !== $excludeuserid) {
+            $userids[$id] = $id;
+        }
+    }
+
+    return array_values($userids);
+}
+
+/**
+ * Returns site admin user IDs.
+ *
+ * @param int $excludeuserid
+ * @return array
+ */
+function userstatsadvanced_show_messages_get_site_admin_user_ids(int $excludeuserid = 0): array {
+    $userids = [];
+    if (!function_exists('get_admins')) {
+        return [];
+    }
+
+    $admins = get_admins();
+    if (empty($admins)) {
+        return [];
+    }
+
+    foreach ($admins as $admin) {
+        $id = (int)($admin->id ?? 0);
+        if ($id > 0 && $id !== $excludeuserid) {
+            $userids[$id] = $id;
         }
     }
 
@@ -743,4 +1104,30 @@ function userstatsadvanced_show_messages_render_created_html(int $timestamp): st
     return s(userdate($timestamp, '%d/%m/%Y')) .
         html_writer::empty_tag('br') .
         s(userdate($timestamp, '%H:%M'));
+}
+
+/**
+ * Merges message arrays and sorts records by timestamp (newest first).
+ *
+ * @param array $records
+ * @param array $extrarecords
+ * @return array
+ */
+function userstatsadvanced_show_messages_merge_records_by_date(array $records, array $extrarecords): array {
+    $allrecords = array_merge($records, $extrarecords);
+    if (empty($allrecords)) {
+        return [];
+    }
+
+    usort($allrecords, static function(array $a, array $b): int {
+        $ats = (int)($a['createdts'] ?? 0);
+        $bts = (int)($b['createdts'] ?? 0);
+        if ($ats === $bts) {
+            return 0;
+        }
+
+        return ($ats > $bts) ? -1 : 1;
+    });
+
+    return $allrecords;
 }
