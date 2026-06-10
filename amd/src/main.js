@@ -53,6 +53,20 @@ define(
                         'sZeroRecords': M.str.block_configurable_reports.datatables_zerorecords
                     }
                 });
+
+                // Inject "Actualizar registros" button into the DataTables search bar.
+                if (params.refreshurl) {
+                    var tableId = params.selector.replace(/^#/, '');
+                    var $filterbar = $('#' + tableId + '_filter');
+                    if ($filterbar.length) {
+                        var $btn = $('<a>')
+                            .attr('href', params.refreshurl)
+                            .addClass('btn btn-sm btn-secondary cr-refresh-btn')
+                            .css({'margin-right': '12px', 'vertical-align': 'middle'})
+                            .text(params.refreshlabel || 'Actualizar registros');
+                        $filterbar.prepend($btn);
+                    }
+                }
             },
             cmirror: function() {
                 // Documentation can be found @ http://codemirror.net/

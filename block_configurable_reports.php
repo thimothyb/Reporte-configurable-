@@ -167,6 +167,17 @@ class block_configurable_reports extends block_list {
             $this->content->items[] = html_writer::link($url, $linktext);
         }
 
+        if ($course->id != SITEID && has_capability('block/configurable_reports:managereports', $context)) {
+            $url = new moodle_url(
+                '/blocks/configurable_reports/course_sections_config.php',
+                ['courseid' => $course->id]
+            );
+            $this->content->items[] = html_writer::link(
+                $url,
+                get_string('coursesectionsconfig', 'block_configurable_reports')
+            );
+        }
+
         return $this->content;
     }
 

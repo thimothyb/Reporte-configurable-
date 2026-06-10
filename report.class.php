@@ -1104,9 +1104,18 @@ abstract class report_base {
      * @return void
      */
     public function add_jsordering(moodle_page $moodlepage): void {
+        global $COURSE;
         switch (get_config('block_configurable_reports', 'reporttableui')) {
             case 'datatables':
-                cr_add_jsdatatables('#reporttable', $moodlepage);
+                $refreshurlattrs = array_merge(
+                    ['id' => $this->config->id, 'courseid' => $COURSE->id],
+                    cr_get_viewreport_request_params(['refresh', 'refreshed', 'download', 'format', 'sesskey'])
+                );
+                $refreshurlattrs['refresh'] = 1;
+                $refreshurlattrs['sesskey'] = sesskey();
+                $refreshurl   = (new moodle_url('/blocks/configurable_reports/viewreport.php', $refreshurlattrs))->out(false);
+                $refreshlabel = get_string('actualizarregistros', 'block_configurable_reports');
+                cr_add_jsdatatables('#reporttable', $moodlepage, $refreshurl, $refreshlabel);
                 break;
             case 'jquery':
                 cr_add_jsordering('#reporttable', $moodlepage);

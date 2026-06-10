@@ -25,30 +25,37 @@
 
 defined('MOODLE_INTERNAL') || die;
 
+// Only show the component tabs the user needs.
+// ordering, calcs and plot are hidden intentionally.
+$allowedcomponents = ['columns', 'conditions', 'filters', 'template', 'permissions'];
+
 $top = [];
 
-$url = new moodle_url('/blocks/configurable_reports/viewreport.php', ['id' => $report->id, 'courseid' => $COURSE->id]);
-$top[] = new tabobject('viewreport', $url, get_string('viewreport', 'block_configurable_reports'));
+// Informe — report settings (editreport.php). Shown first.
+$url = new moodle_url('/blocks/configurable_reports/editreport.php', ['id' => $report->id, 'courseid' => $COURSE->id]);
+$top[] = new tabobject('report', $url, get_string('report', 'block_configurable_reports'));
 
-$refreshurlattrs = array_merge(
-    ['id' => $report->id, 'courseid' => $COURSE->id],
-    cr_get_viewreport_request_params(['refresh', 'refreshed', 'download', 'format', 'sesskey'])
-);
-$refreshurlattrs['refresh'] = 1;
-$refreshurlattrs['sesskey'] = sesskey();
-$refreshurl = new moodle_url('/blocks/configurable_reports/viewreport.php', $refreshurlattrs);
-$top[] = new tabobject('refreshreport', $refreshurl, get_string('refreshreporttab', 'block_configurable_reports'));
-
+// Component tabs (Columnas, Condiciones, Filtros, Plantilla, Permisos).
 foreach ($reportclass->components as $comptab) {
+    if (!in_array($comptab, $allowedcomponents, true)) {
+        continue;
+    }
     $urlattrs = ['id' => $report->id, 'comp' => $comptab, 'courseid' => $COURSE->id];
     $url = new moodle_url('/blocks/configurable_reports/editcomp.php', $urlattrs);
     $top[] = new tabobject($comptab, $url, get_string($comptab, 'block_configurable_reports'));
 }
 
-$url = new moodle_url('/blocks/configurable_reports/editreport.php', ['id' => $report->id, 'courseid' => $COURSE->id]);
-$top[] = new tabobject('report', $url, get_string('report', 'block_configurable_reports'));
+// Exportar plantilla — export the report configuration template.
+// sesskey is required by export.php (confirm_sesskey()).
+$url = new moodle_url('/blocks/configurable_reports/export.php', [
+    'id'       => $report->id,
+    'courseid' => $COURSE->id,
+    'sesskey'  => sesskey(),
+]);
+$top[] = new tabobject('exporttemplate', $url, get_string('exporttemplate', 'block_configurable_reports'));
 
-$url = new moodle_url('/blocks/configurable_reports/managereport.php', ['courseid' => $course->id]);
-$top[] = new tabobject('managereports', $url, get_string('managereports', 'block_configurable_reports'));
+// Ver informe — view the report output.
+$url = new moodle_url('/blocks/configurable_reports/viewreport.php', ['id' => $report->id, 'courseid' => $COURSE->id]);
+$top[] = new tabobject('viewreport', $url, get_string('viewreport', 'block_configurable_reports'));
 
 print_tabs([$top], $currenttab);

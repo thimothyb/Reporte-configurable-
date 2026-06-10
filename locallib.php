@@ -57,9 +57,13 @@ function cr_print_js_function() {
  * @param moodle_page $page
  * @return void
  */
-function cr_add_jsdatatables(string $cssid, moodle_page $page) {
+function cr_add_jsdatatables(string $cssid, moodle_page $page, string $refreshurl = '', string $refreshlabel = '') {
     $data = [];
     $data['selector'] = $cssid;
+    if ($refreshurl !== '') {
+        $data['refreshurl']   = $refreshurl;
+        $data['refreshlabel'] = ($refreshlabel !== '') ? $refreshlabel : get_string('refreshreporttab', 'block_configurable_reports');
+    }
 
     $page->requires->string_for_js('thousandssep', 'langconfig');
     $page->requires->strings_for_js(
@@ -342,6 +346,28 @@ function cr_get_export_metadata_rows(): array {
     }
 
     return $rows;
+}
+
+/**
+ * Returns the section IDs selected for a course's report data source.
+ *
+ * Returns null when the feature is disabled or no selection has been saved,
+ * meaning reports should not filter by section at all.
+ *
+ * @param  int        $courseid
+ * @return int[]|null Array of mdl_course_sections.id values, or null if no filter applies.
+ */
+function cr_get_course_sections_filter(int $courseid): ?array {
+    $disabled = (bool) get_config('block_configurable_reports', 'course_sections_disabled_' . $courseid);
+    if ($disabled) {
+        return null;
+    }
+    $raw = get_config('block_configurable_reports', 'course_sections_config_' . $courseid);
+    if ($raw === false || $raw === '') {
+        return null;
+    }
+    $ids = json_decode($raw, true);
+    return (is_array($ids) && count($ids) > 0) ? array_map('intval', $ids) : null;
 }
 
 /**

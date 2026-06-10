@@ -32,3 +32,53 @@ function block_configurable_reports_security_checks(): array {
     return [new block_configurable_reports\check\sql_execution()];
 }
 
+/**
+ * Adds visible configurable reports to the course navigation (Reports section).
+ *
+ * @param navigation_node $parentnode
+ * @param stdClass        $course
+ * @param context_course  $context
+ * @return void
+ */
+function block_configurable_reports_extend_navigation_course(
+    navigation_node $parentnode,
+    stdClass $course,
+    context_course $context
+): void {
+    global $DB, $USER, $CFG;
+
+    if (!isloggedin()) {
+        return;
+    }
+
+    require_once($CFG->dirroot . '/blocks/configurable_reports/locallib.php');
+
+    $reports = $DB->get_records(
+        'block_configurable_reports',
+        ['courseid' => $course->id, 'global' => 0],
+        'name ASC'
+    );
+
+    if (!$reports) {
+        return;
+    }
+
+    foreach ($reports as $report) {
+        if (!$report->visible || !cr_check_report_permissions($report, $USER->id, $context)) {
+            continue;
+        }
+        $url = new moodle_url('/blocks/configurable_reports/viewreport.php', [
+            'id'       => $report->id,
+            'courseid' => $course->id,
+        ]);
+        $parentnode->add(
+            format_string($report->name),
+            $url,
+            navigation_node::TYPE_SETTING,
+            null,
+            'cr_report_' . $report->id,
+            new pix_icon('i/report', '')
+        );
+    }
+}
+
