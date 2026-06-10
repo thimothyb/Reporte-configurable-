@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Popup to add multiple quiz columns for activity/resource statistics.
+ * Popup to add multiple columns for activity/resource statistics.
  *
  * @package    block_configurable_reports
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
@@ -27,20 +27,6 @@ require_once($CFG->dirroot . '/blocks/configurable_reports/components/columns/sc
 
 $id = required_param('id', PARAM_INT);
 $submitted = optional_param('submitadd', '', PARAM_RAW_TRIMMED) !== '';
-$selectedinstanceids = optional_param_array('quizinstance', [], PARAM_INT);
-
-$metricoptions = scormadvancedgrades_addmultiple_get_metric_options();
-$selectedmetrics = [];
-foreach ($metricoptions as $metrickey => $metricdata) {
-    $paramname = (string)$metricdata['param'];
-    $defaultselected = !empty($metricdata['default']) ? 1 : 0;
-    $enabled = $submitted
-        ? optional_param($paramname, 0, PARAM_BOOL)
-        : optional_param($paramname, $defaultselected, PARAM_BOOL);
-    if ($enabled) {
-        $selectedmetrics[] = $metrickey;
-    }
-}
 
 if (!$report = $DB->get_record('block_configurable_reports', ['id' => $id])) {
     throw new moodle_exception('reportdoesnotexists', 'block_configurable_reports');
@@ -69,18 +55,63 @@ $url = new moodle_url('/blocks/configurable_reports/components/columns/scormadva
 $PAGE->set_context($context);
 $PAGE->set_pagelayout('popup');
 $PAGE->set_url($url);
-$title = scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_title', 'Añadir varias columnas');
+$title = scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_title', 'Anadir varias columnas');
 $PAGE->set_title($title);
 $PAGE->set_heading($title);
 
-$activities = scormadvancedgrades_addmultiple_get_quiz_activities((int)$course->id);
-$selectedinstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedinstanceids);
+$quizmetricoptions = scormadvancedgrades_addmultiple_get_quiz_metric_options();
+$assignmetricoptions = scormadvancedgrades_addmultiple_get_assign_metric_options();
+$forummetricoptions = scormadvancedgrades_addmultiple_get_forum_metric_options();
+$chatmetricoptions = scormadvancedgrades_addmultiple_get_chat_metric_options();
+$scormmetricoptions = scormadvancedgrades_addmultiple_get_scorm_metric_options();
 
-if (!$submitted && empty($selectedinstanceids)) {
-    foreach ($activities as $activity) {
-        $selectedinstanceids[] = (int)$activity->instanceid;
-    }
-    $selectedinstanceids = array_values(array_unique($selectedinstanceids));
+$selectedquizmetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($quizmetricoptions, $submitted);
+$selectedassignmetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($assignmetricoptions, $submitted);
+$selectedforummetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($forummetricoptions, $submitted);
+$selectedchatmetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($chatmetricoptions, $submitted);
+$selectedscormmetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($scormmetricoptions, $submitted);
+
+$quizactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'quiz');
+$assignactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'assign');
+$forumactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'forum');
+$chatactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'chat');
+$scormactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'scorm');
+
+$selectedquizinstanceids = optional_param_array('quizinstance', [], PARAM_INT);
+$selectedassigninstanceids = optional_param_array('assigninstance', [], PARAM_INT);
+$selectedforuminstanceids = optional_param_array('foruminstance', [], PARAM_INT);
+$selectedchatinstanceids = optional_param_array('chatinstance', [], PARAM_INT);
+$selectedscorminstanceids = optional_param_array('scorminstance', [], PARAM_INT);
+$selectedquizinstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedquizinstanceids);
+$selectedassigninstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedassigninstanceids);
+$selectedforuminstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedforuminstanceids);
+$selectedchatinstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedchatinstanceids);
+$selectedscorminstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedscorminstanceids);
+
+if (!$submitted && empty($selectedquizinstanceids)) {
+    $selectedquizinstanceids = array_map(static function($activity): int {
+        return (int)$activity->instanceid;
+    }, $quizactivities);
+}
+if (!$submitted && empty($selectedassigninstanceids)) {
+    $selectedassigninstanceids = array_map(static function($activity): int {
+        return (int)$activity->instanceid;
+    }, $assignactivities);
+}
+if (!$submitted && empty($selectedforuminstanceids)) {
+    $selectedforuminstanceids = array_map(static function($activity): int {
+        return (int)$activity->instanceid;
+    }, $forumactivities);
+}
+if (!$submitted && empty($selectedchatinstanceids)) {
+    $selectedchatinstanceids = array_map(static function($activity): int {
+        return (int)$activity->instanceid;
+    }, $chatactivities);
+}
+if (!$submitted && empty($selectedscorminstanceids)) {
+    $selectedscorminstanceids = array_map(static function($activity): int {
+        return (int)$activity->instanceid;
+    }, $scormactivities);
 }
 
 $saved = false;
@@ -88,21 +119,71 @@ $error = '';
 if ($submitted) {
     require_sesskey();
 
-    if (empty($selectedmetrics)) {
+    $hasquizselection = !empty($selectedquizmetrics);
+    $hasassignselection = !empty($selectedassignmetrics);
+    $hasforumselection = !empty($selectedforummetrics);
+    $haschatselection = !empty($selectedchatmetrics);
+    $hasscormselection = !empty($selectedscormmetrics);
+    if (!$hasquizselection && !$hasassignselection && !$hasforumselection && !$haschatselection && !$hasscormselection) {
         $error = scormadvancedgrades_addmultiple_label(
             'scormadvancedgrades_addmultiple_nometrics',
-            'Debes seleccionar al menos una opción de columnas.'
+            'Debes seleccionar al menos una opcion de columnas.'
         );
-    } else if (empty($selectedinstanceids)) {
+    } else if ($hasquizselection && empty($selectedquizinstanceids)) {
         $error = scormadvancedgrades_addmultiple_label(
-            'scormadvancedgrades_addmultiple_noselection',
-            'Debes seleccionar al menos una actividad.'
+            'scormadvancedgrades_addmultiple_noselection_quiz',
+            'Debes seleccionar al menos un cuestionario.'
+        );
+    } else if ($hasassignselection && empty($selectedassigninstanceids)) {
+        $error = scormadvancedgrades_addmultiple_label(
+            'scormadvancedgrades_addmultiple_noselection_assign',
+            'Debes seleccionar al menos una tarea.'
+        );
+    } else if ($hasforumselection && empty($selectedforuminstanceids)) {
+        $error = scormadvancedgrades_addmultiple_label(
+            'scormadvancedgrades_addmultiple_noselection_forum',
+            'Debes seleccionar al menos un foro.'
+        );
+    } else if ($haschatselection && empty($selectedchatinstanceids)) {
+        $error = scormadvancedgrades_addmultiple_label(
+            'scormadvancedgrades_addmultiple_noselection_chat',
+            'Debes seleccionar al menos un chat.'
+        );
+    } else if ($hasscormselection && empty($selectedscorminstanceids)) {
+        $error = scormadvancedgrades_addmultiple_label(
+            'scormadvancedgrades_addmultiple_noselection_scorm',
+            'Debes seleccionar al menos un SCORM.'
         );
     } else {
         scormadvancedgrades_addmultiple_save_columns(
             $report,
-            $selectedinstanceids,
-            $selectedmetrics
+            [
+                'quiz' => [
+                    'instanceids' => $selectedquizinstanceids,
+                    'metrics' => $selectedquizmetrics,
+                    'metricoptions' => $quizmetricoptions,
+                ],
+                'assign' => [
+                    'instanceids' => $selectedassigninstanceids,
+                    'metrics' => $selectedassignmetrics,
+                    'metricoptions' => $assignmetricoptions,
+                ],
+                'forum' => [
+                    'instanceids' => $selectedforuminstanceids,
+                    'metrics' => $selectedforummetrics,
+                    'metricoptions' => $forummetricoptions,
+                ],
+                'chat' => [
+                    'instanceids' => $selectedchatinstanceids,
+                    'metrics' => $selectedchatmetrics,
+                    'metricoptions' => $chatmetricoptions,
+                ],
+                'scorm' => [
+                    'instanceids' => $selectedscorminstanceids,
+                    'metrics' => $selectedscormmetrics,
+                    'metricoptions' => $scormmetricoptions,
+                ],
+            ]
         );
         $saved = true;
     }
@@ -113,7 +194,7 @@ echo $OUTPUT->heading($title);
 
 if ($saved) {
     echo $OUTPUT->notification(
-        scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_saved', 'Columnas añadidas correctamente.'),
+        scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_saved', 'Columnas anadidas correctamente.'),
         'notifysuccess'
     );
 
@@ -142,7 +223,7 @@ if ($error !== '') {
     echo $OUTPUT->notification($error, 'notifyproblem');
 }
 
-if (empty($activities)) {
+if (empty($quizactivities) && empty($assignactivities) && empty($forumactivities) && empty($chatactivities) && empty($scormactivities)) {
     echo $OUTPUT->notification(get_string('norecordsfound', 'block_configurable_reports'), 'notifyinfo');
     echo $OUTPUT->footer();
     exit;
@@ -152,94 +233,54 @@ echo html_writer::tag(
     'p',
     scormadvancedgrades_addmultiple_label(
         'scormadvancedgrades_addmultiple_intro',
-        'Selecciona columnas globales y cuestionarios para añadir automáticamente estadísticas.'
+        'Selecciona columnas globales y actividades para anadir automaticamente estadisticas.'
     )
 );
 
 echo html_writer::start_tag('form', ['method' => 'post', 'action' => $url->out(false)]);
 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
 
-echo html_writer::tag(
-    'h3',
-    s(scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_quizsection', 'Cuestionarios')),
-    ['class' => 'h5 mb-2']
+scormadvancedgrades_addmultiple_render_module_block(
+    'quiz',
+    scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_quizsection', 'Cuestionarios'),
+    $quizmetricoptions,
+    $selectedquizmetrics,
+    $quizactivities,
+    $selectedquizinstanceids
 );
 
-echo html_writer::start_div('mb-3');
-foreach ($metricoptions as $metrickey => $metricdata) {
-    $ischecked = in_array($metrickey, $selectedmetrics, true);
-    $metricattrs = [
-        'type' => 'checkbox',
-        'name' => (string)$metricdata['param'],
-        'value' => 1,
-    ];
-    if ($ischecked) {
-        $metricattrs['checked'] = 'checked';
-    }
-
-    echo html_writer::start_tag('label', ['class' => 'd-block mb-2']);
-    echo html_writer::empty_tag('input', $metricattrs) . ' ' .
-        s(scormadvancedgrades_addmultiple_label(
-            (string)$metricdata['labelkey'],
-            (string)$metricdata['fallback']
-        ));
-    echo html_writer::end_tag('label');
-}
-echo html_writer::end_div();
-
-echo html_writer::div(
-    html_writer::link(
-        '#',
-        scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_selectall', 'Seleccionar todo'),
-        ['id' => 'cr-sag-select-all']
-    ) .
-    ' / ' .
-    html_writer::link(
-        '#',
-        scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_clearall', 'Quitar seleccion'),
-        ['id' => 'cr-sag-clear-all']
-    ),
-    'mb-2'
+scormadvancedgrades_addmultiple_render_module_block(
+    'assign',
+    scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_assignsection', 'Tareas'),
+    $assignmetricoptions,
+    $selectedassignmetrics,
+    $assignactivities,
+    $selectedassigninstanceids
 );
-
-$table = new html_table();
-$table->attributes['class'] = 'generaltable';
-$table->head = [
-    scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_selectcol', 'Seleccionar'),
-    scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_activitycol', 'Actividad'),
-];
-$table->data = [];
-
-foreach ($activities as $index => $activity) {
-    $instanceid = (int)$activity->instanceid;
-    $checked = in_array($instanceid, $selectedinstanceids, true);
-    $inputattrs = [
-        'type' => 'checkbox',
-        'class' => 'cr-sag-activity',
-        'name' => 'quizinstance[]',
-        'value' => $instanceid,
-    ];
-    if ($checked) {
-        $inputattrs['checked'] = 'checked';
-    }
-
-    $checkbox = html_writer::empty_tag('input', $inputattrs);
-    $name = trim((string)$activity->name);
-    if ($name === '') {
-        $name = scormadvancedgrades_addmultiple_label(
-            'scormadvancedgrades_addmultiple_fallbackname',
-            'Actividad {$a}',
-            $index + 1
-        );
-    }
-
-    $table->data[] = [
-        $checkbox,
-        format_string($name),
-    ];
-}
-
-echo html_writer::table($table);
+scormadvancedgrades_addmultiple_render_module_block(
+    'forum',
+    scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_forumsection', 'Foros'),
+    $forummetricoptions,
+    $selectedforummetrics,
+    $forumactivities,
+    $selectedforuminstanceids
+);
+scormadvancedgrades_addmultiple_render_module_block(
+    'chat',
+    scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_chatsection', 'Chats'),
+    $chatmetricoptions,
+    $selectedchatmetrics,
+    $chatactivities,
+    $selectedchatinstanceids
+);
+scormadvancedgrades_addmultiple_render_module_block(
+    'scorm',
+    scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_scormsection', 'SCORMs'),
+    $scormmetricoptions,
+    $selectedscormmetrics,
+    $scormactivities,
+    $selectedscorminstanceids
+);
 
 echo html_writer::start_div('mt-3');
 echo html_writer::empty_tag('input', [
@@ -258,50 +299,63 @@ echo html_writer::end_tag('form');
 
 echo html_writer::script(
     "(function(){\n" .
-    "  var all = document.getElementById('cr-sag-select-all');\n" .
-    "  var clear = document.getElementById('cr-sag-clear-all');\n" .
-    "  function setChecked(value) {\n" .
-    "    var boxes = document.querySelectorAll('.cr-sag-activity');\n" .
-    "    boxes.forEach(function(box){ box.checked = value; });\n" .
-    "  }\n" .
-    "  if (all) {\n" .
-    "    all.addEventListener('click', function(e){ e.preventDefault(); setChecked(true); });\n" .
-    "  }\n" .
-    "  if (clear) {\n" .
-    "    clear.addEventListener('click', function(e){ e.preventDefault(); setChecked(false); });\n" .
-    "  }\n" .
+    // --- Accordion toggle (pure vanilla JS, no Bootstrap dependency) ---
+    "  document.querySelectorAll('.cr-sag-toggle').forEach(function(btn){\n" .
+    "    var bodyId = btn.getAttribute('data-target');\n" .
+    "    var body = document.getElementById(bodyId);\n" .
+    "    if (!body) return;\n" .
+    "    var arrow = btn.querySelector('.cr-sag-arrow');\n" .
+    "    btn.addEventListener('click', function(){\n" .
+    "      var open = body.style.display !== 'none';\n" .
+    "      body.style.display = open ? 'none' : 'block';\n" .
+    "      btn.setAttribute('aria-expanded', open ? 'false' : 'true');\n" .
+    "      if (arrow) arrow.style.transform = open ? '' : 'rotate(90deg)';\n" .
+    "    });\n" .
+    "  });\n" .
+    // --- Select-all toggle (alternates between all-checked / all-unchecked) ---
+    "  document.querySelectorAll('.cr-sag-select-all').forEach(function(link){\n" .
+    "    var mod = link.getAttribute('data-mod');\n" .
+    "    var allChecked = true;\n" .
+    "    link.addEventListener('click', function(e){\n" .
+    "      e.preventDefault();\n" .
+    "      document.querySelectorAll('.cr-sag-activity-' + mod).forEach(function(box){\n" .
+    "        box.checked = allChecked;\n" .
+    "      });\n" .
+    "      allChecked = !allChecked;\n" .
+    "    });\n" .
+    "  });\n" .
     "})();"
 );
 
 echo $OUTPUT->footer();
 
 /**
- * Returns the available quiz metric options for add-multiple popup.
+ * Returns metric options for quiz module.
  *
  * @return array<string,array<string,mixed>>
  */
-function scormadvancedgrades_addmultiple_get_metric_options(): array {
+function scormadvancedgrades_addmultiple_get_quiz_metric_options(): array {
     return [
         'completiondate' => [
             'param' => 'addquizcompletiondate',
             'labelkey' => 'scormadvancedgrades_addmultiple_addquizcompletiondate',
-            'fallback' => 'Añadir la fecha de realización de todos los cuestionarios',
-            'default' => 1,
+            'fallback' => 'Anadir la fecha de realizacion de todos los cuestionarios',
+            'default' => 0,
             'columnprefix' => 'FECHA DE REALIZACION ACTIVIDAD',
             'format' => 'datetime',
         ],
         'score' => [
             'param' => 'addquizscore',
             'labelkey' => 'scormadvancedgrades_addmultiple_addquizscore',
-            'fallback' => 'Añadir la puntuación de todos los cuestionarios',
-            'default' => 1,
-            'columnprefix' => 'NOTA ACTIVIDAD',
+            'fallback' => 'Anadir la puntuacion de todos los cuestionarios',
+            'default' => 0,
+            'columnprefix' => 'PUNTUACION ACTIVIDAD',
             'format' => 'percent',
         ],
         'dedicationtime' => [
             'param' => 'addquizdedicationtime',
             'labelkey' => 'scormadvancedgrades_addmultiple_addquizdedicationtime',
-            'fallback' => 'Añadir el tiempo de dedicación de todos los cuestionarios',
+            'fallback' => 'Anadir el tiempo de dedicacion de todos los cuestionarios',
             'default' => 0,
             'columnprefix' => 'TIEMPO DE DEDICACION ACTIVIDAD',
             'format' => 'text',
@@ -309,7 +363,7 @@ function scormadvancedgrades_addmultiple_get_metric_options(): array {
         'opendate' => [
             'param' => 'addquizopendate',
             'labelkey' => 'scormadvancedgrades_addmultiple_addquizopendate',
-            'fallback' => 'Añadir la fecha de apertura de todos los cuestionarios',
+            'fallback' => 'Anadir la fecha de apertura de todos los cuestionarios',
             'default' => 0,
             'columnprefix' => 'FECHA DE APERTURA ACTIVIDAD',
             'format' => 'datetime',
@@ -317,7 +371,7 @@ function scormadvancedgrades_addmultiple_get_metric_options(): array {
         'firstpassattempt' => [
             'param' => 'addquizfirstpassattempt',
             'labelkey' => 'scormadvancedgrades_addmultiple_addquizfirstpassattempt',
-            'fallback' => 'Añadir el primer intento aprobado de todos los cuestionarios',
+            'fallback' => 'Anadir el primer intento aprobado de todos los cuestionarios',
             'default' => 0,
             'columnprefix' => 'PRIMER INTENTO APROBADO ACTIVIDAD',
             'format' => 'number',
@@ -326,29 +380,363 @@ function scormadvancedgrades_addmultiple_get_metric_options(): array {
 }
 
 /**
- * Gets visible quiz activities in course order.
+ * Returns metric options for assignment module.
+ *
+ * @return array<string,array<string,mixed>>
+ */
+function scormadvancedgrades_addmultiple_get_assign_metric_options(): array {
+    return [
+        'score' => [
+            'param' => 'addassignscore',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addassignscore',
+            'fallback' => 'Anadir la puntuacion de todas las tareas',
+            'default' => 0,
+            'columnprefix' => 'NOTA ACTIVIDAD',
+            'format' => 'percent',
+        ],
+        'submissiondate' => [
+            'param' => 'addassignsubmissiondate',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addassignsubmissiondate',
+            'fallback' => 'Anadir fechas de entrega de tareas',
+            'default' => 0,
+            'columnprefix' => 'FECHA DE ENTREGA ACTIVIDAD',
+            'format' => 'datetime',
+        ],
+        'gradedate' => [
+            'param' => 'addassigngradedate',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addassigngradedate',
+            'fallback' => 'Anadir fechas de correccion de tareas',
+            'default' => 0,
+            'columnprefix' => 'FECHA DE CORRECCION ACTIVIDAD',
+            'format' => 'datetime',
+        ],
+        'grader' => [
+            'param' => 'addassigngrader',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addassigngrader',
+            'fallback' => 'Anadir usuario que ha corregido la tarea',
+            'default' => 0,
+            'columnprefix' => 'USUARIO QUE HA CORREGIDO ACTIVIDAD',
+            'format' => 'text',
+        ],
+        'feedback' => [
+            'param' => 'addassignfeedback',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addassignfeedback',
+            'fallback' => 'Feedback en la entrega',
+            'default' => 0,
+            'columnprefix' => 'FEEDBACK EN LA ENTREGA ACTIVIDAD',
+            'format' => 'text',
+        ],
+    ];
+}
+
+/**
+ * Returns metric options for SCORM module.
+ *
+ * @return array<string,array<string,mixed>>
+ */
+function scormadvancedgrades_addmultiple_get_scorm_metric_options(): array {
+    return [
+        'completiondate' => [
+            'param' => 'addscormcompletiondate',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addscormcompletiondate',
+            'fallback' => 'Anadir fecha de finalizacion del SCORM',
+            'default' => 0,
+            'columnprefix' => 'FECHA FINALIZACION SCORM ACTIVIDAD',
+            'format' => 'datetime',
+        ],
+        'score' => [
+            'param' => 'addsCormscore',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addsCormscore',
+            'fallback' => 'Anadir puntuacion del SCORM',
+            'default' => 0,
+            'columnprefix' => 'PUNTUACION SCORM ACTIVIDAD',
+            'format' => 'percent',
+        ],
+        'scocompleted' => [
+            'param' => 'addscormscocompleted',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addscormscocompleted',
+            'fallback' => 'Anadir objetos SCO completados',
+            'default' => 0,
+            'columnprefix' => 'SCO COMPLETADOS SCORM ACTIVIDAD',
+            'format' => 'number',
+        ],
+        'dedicationtime' => [
+            'param' => 'addsCormdedicationtime',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addsCormdedicationtime',
+            'fallback' => 'Anadir tiempo de dedicacion en el SCORM',
+            'default' => 0,
+            'columnprefix' => 'TIEMPO DEDICACION SCORM ACTIVIDAD',
+            'format' => 'text',
+        ],
+        'lastaccess' => [
+            'param' => 'addsCormlastaccess',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addsCormlastaccess',
+            'fallback' => 'Anadir ultimo acceso al SCORM',
+            'default' => 0,
+            'columnprefix' => 'ULTIMO ACCESO SCORM ACTIVIDAD',
+            'format' => 'datetime',
+        ],
+    ];
+}
+
+/**
+ * Returns metric options for chat module.
+ *
+ * @return array<string,array<string,mixed>>
+ */
+function scormadvancedgrades_addmultiple_get_chat_metric_options(): array {
+    return [
+        'messages' => [
+            'param' => 'addchatmessages',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addchatmessages',
+            'fallback' => 'Anadir numero de mensajes en chats',
+            'default' => 0,
+            'columnprefix' => 'NUMERO MENSAJES CHAT ACTIVIDAD',
+            'format' => 'number',
+        ],
+        'firstmessage' => [
+            'param' => 'addchatfirstmessage',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addchatfirstmessage',
+            'fallback' => 'Anadir primera fecha y hora en chats',
+            'default' => 0,
+            'columnprefix' => 'PRIMERA FECHA HORA CHAT ACTIVIDAD',
+            'format' => 'datetime',
+        ],
+        'lastmessage' => [
+            'param' => 'addchatlastmessage',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addchatlastmessage',
+            'fallback' => 'Anadir ultima fecha y hora en chats',
+            'default' => 0,
+            'columnprefix' => 'ULTIMA FECHA HORA CHAT ACTIVIDAD',
+            'format' => 'datetime',
+        ],
+    ];
+}
+
+/**
+ * Returns metric options for forum module.
+ *
+ * @return array<string,array<string,mixed>>
+ */
+function scormadvancedgrades_addmultiple_get_forum_metric_options(): array {
+    return [
+        'posts' => [
+            'param' => 'addforumposts',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addforumposts',
+            'fallback' => 'Anadir numero posts de los usuarios en el foro',
+            'default' => 0,
+            'columnprefix' => 'NUMERO POSTS FORO ACTIVIDAD',
+            'format' => 'number',
+        ],
+        'firstpost' => [
+            'param' => 'addforumfirstpost',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addforumfirstpost',
+            'fallback' => 'Anadir fecha del primer post',
+            'default' => 0,
+            'columnprefix' => 'FECHA PRIMER POST FORO ACTIVIDAD',
+            'format' => 'datetime',
+        ],
+        'lastpost' => [
+            'param' => 'addforumlastpost',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addforumlastpost',
+            'fallback' => 'Anadir fecha del ultimo post',
+            'default' => 0,
+            'columnprefix' => 'FECHA ULTIMO POST FORO ACTIVIDAD',
+            'format' => 'datetime',
+        ],
+    ];
+}
+
+/**
+ * Collects selected metrics from request.
+ *
+ * @param array<string,array<string,mixed>> $metricoptions
+ * @param bool $submitted
+ * @return array<int,string>
+ */
+function scormadvancedgrades_addmultiple_collect_selected_metrics(array $metricoptions, bool $submitted): array {
+    $selectedmetrics = [];
+    foreach ($metricoptions as $metrickey => $metricdata) {
+        $paramname = (string)$metricdata['param'];
+        $defaultselected = !empty($metricdata['default']) ? 1 : 0;
+        $enabled = $submitted
+            ? optional_param($paramname, 0, PARAM_BOOL)
+            : optional_param($paramname, $defaultselected, PARAM_BOOL);
+        if ($enabled) {
+            $selectedmetrics[] = $metrickey;
+        }
+    }
+
+    return $selectedmetrics;
+}
+
+/**
+ * Renders one module block as a collapsible accordion in the popup.
+ *
+ * @param string $modkey
+ * @param string $sectiontitle
+ * @param array<string,array<string,mixed>> $metricoptions
+ * @param array<int,string> $selectedmetrics
+ * @param array<int,object> $activities
+ * @param array<int> $selectedinstanceids
+ * @return void
+ */
+function scormadvancedgrades_addmultiple_render_module_block(
+    string $modkey,
+    string $sectiontitle,
+    array $metricoptions,
+    array $selectedmetrics,
+    array $activities,
+    array $selectedinstanceids
+): void {
+    if (empty($metricoptions) || empty($activities)) {
+        return;
+    }
+
+    $collapseid = 'cr-sag-body-' . $modkey;
+    // Start collapsed; JS will open on click.
+    $bodystyle = 'display:none;';
+
+    echo html_writer::start_tag('div', ['class' => 'cr-sag-accordion mt-2']);
+
+    // Header button.
+    echo html_writer::start_tag('button', [
+        'type' => 'button',
+        'class' => 'cr-sag-toggle w-100 d-flex align-items-center justify-content-between p-2 border rounded',
+        'data-target' => $collapseid,
+        'style' => 'background:#f8f9fa;cursor:pointer;text-align:left;',
+        'aria-expanded' => 'false',
+    ]);
+    echo html_writer::tag('strong', s($sectiontitle));
+    echo html_writer::tag('span', '&#9654;', [
+        'class' => 'cr-sag-arrow',
+        'aria-hidden' => 'true',
+        'style' => 'font-size:0.8em;transition:transform 0.2s;display:inline-block;',
+    ]);
+    echo html_writer::end_tag('button');
+
+    // Body (hidden by default).
+    echo html_writer::start_tag('div', [
+        'id' => $collapseid,
+        'style' => $bodystyle,
+        'class' => 'cr-sag-body border border-top-0 rounded-bottom p-3',
+    ]);
+
+    // Metric checkboxes.
+    echo html_writer::start_div('mb-3');
+    foreach ($metricoptions as $metrickey => $metricdata) {
+        $ischecked = in_array($metrickey, $selectedmetrics, true);
+        $metricattrs = [
+            'type' => 'checkbox',
+            'name' => (string)$metricdata['param'],
+            'value' => 1,
+        ];
+        if ($ischecked) {
+            $metricattrs['checked'] = 'checked';
+        }
+        echo html_writer::start_tag('label', ['class' => 'd-block mb-2']);
+        echo html_writer::empty_tag('input', $metricattrs) . ' ' .
+            s(scormadvancedgrades_addmultiple_label(
+                (string)$metricdata['labelkey'],
+                (string)$metricdata['fallback']
+            ));
+        echo html_writer::end_tag('label');
+    }
+    echo html_writer::end_div();
+
+    // Activity sub-heading + select-all link.
+    $activityheading = scormadvancedgrades_addmultiple_label(
+        'scormadvancedgrades_addmultiple_activitysectionheading',
+        'Selecciona de las actividades de tipo "{$a}"',
+        s($sectiontitle)
+    );
+    echo html_writer::tag('p', $activityheading, ['class' => 'font-weight-bold mb-1']);
+    echo html_writer::div(
+        html_writer::link(
+            '#',
+            scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_selectall', 'Seleccionar todos/ninguno'),
+            ['class' => 'cr-sag-select-all', 'data-mod' => $modkey]
+        ),
+        'mb-2'
+    );
+
+    // Activity table.
+    $table = new html_table();
+    $table->attributes['class'] = 'generaltable';
+    $table->head = [
+        scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_activitycol', 'Actividad'),
+    ];
+    $table->data = [];
+
+    foreach ($activities as $index => $activity) {
+        $instanceid = (int)$activity->instanceid;
+        $checked = in_array($instanceid, $selectedinstanceids, true);
+        $inputattrs = [
+            'type' => 'checkbox',
+            'class' => 'cr-sag-activity-' . $modkey,
+            'name' => $modkey . 'instance[]',
+            'value' => $instanceid,
+        ];
+        if ($checked) {
+            $inputattrs['checked'] = 'checked';
+        }
+
+        $name = trim((string)$activity->name);
+        if ($name === '') {
+            $name = scormadvancedgrades_addmultiple_label(
+                'scormadvancedgrades_addmultiple_fallbackname',
+                'Actividad {$a}',
+                $index + 1
+            );
+        }
+
+        $table->data[] = [
+            html_writer::start_tag('label', ['class' => 'd-flex align-items-center mb-0']) .
+            html_writer::empty_tag('input', $inputattrs) .
+            html_writer::tag('span', format_string($name), ['class' => 'ml-2']) .
+            html_writer::end_tag('label'),
+        ];
+    }
+
+    echo html_writer::table($table);
+
+    echo html_writer::end_tag('div'); // body
+    echo html_writer::end_tag('div'); // accordion wrapper
+}
+
+/**
+ * Gets visible module activities in course order.
  *
  * @param int $courseid
+ * @param string $modname
  * @return array<int,object>
  */
-function scormadvancedgrades_addmultiple_get_quiz_activities(int $courseid): array {
+function scormadvancedgrades_addmultiple_get_module_activities(int $courseid, string $modname): array {
     global $DB;
 
-    if ($courseid <= 0) {
+    $modtotable = [
+        'quiz' => 'quiz',
+        'assign' => 'assign',
+        'forum' => 'forum',
+        'chat' => 'chat',
+        'scorm' => 'scorm',
+    ];
+    if ($courseid <= 0 || !isset($modtotable[$modname])) {
         return [];
     }
 
+    $nametable = $modtotable[$modname];
     $sql = "SELECT cm.id AS cmid,
                    cm.instance AS instanceid,
-                   q.name
+                   a.name
               FROM {course_modules} cm
               JOIN {modules} m ON m.id = cm.module
-              JOIN {quiz} q ON q.id = cm.instance
+              JOIN {" . $nametable . "} a ON a.id = cm.instance
              WHERE cm.course = :courseid
                AND cm.visible = 1
                AND m.name = :modname
           ORDER BY cm.section ASC, cm.added ASC, cm.id ASC";
-    $records = $DB->get_records_sql($sql, ['courseid' => $courseid, 'modname' => 'quiz']);
+    $records = $DB->get_records_sql($sql, ['courseid' => $courseid, 'modname' => $modname]);
 
     return array_values($records);
 }
@@ -357,28 +745,11 @@ function scormadvancedgrades_addmultiple_get_quiz_activities(int $courseid): arr
  * Saves generated columns into report definition.
  *
  * @param object $report
- * @param array<int> $instanceids
- * @param array<int,string> $metrics
+ * @param array<string,array<string,mixed>> $modulepayloads
  * @return void
  */
-function scormadvancedgrades_addmultiple_save_columns(
-    object $report,
-    array $instanceids,
-    array $metrics
-): void {
+function scormadvancedgrades_addmultiple_save_columns(object $report, array $modulepayloads): void {
     global $DB;
-
-    if (empty($instanceids) || empty($metrics)) {
-        return;
-    }
-
-    $metricoptions = scormadvancedgrades_addmultiple_get_metric_options();
-    $metrics = array_values(array_filter($metrics, static function(string $metrickey) use ($metricoptions): bool {
-        return array_key_exists($metrickey, $metricoptions);
-    }));
-    if (empty($metrics)) {
-        return;
-    }
 
     $components = cr_unserialize((string)$report->components);
     $elements = $components['columns']['elements'] ?? [];
@@ -402,34 +773,23 @@ function scormadvancedgrades_addmultiple_save_columns(
             return true;
         }
 
-        if (empty($formdata->stat) || !is_string($formdata->stat)) {
-            $columnname = isset($formdata->columname) ? trim((string)$formdata->columname) : '';
-            if ($columnname === '') {
-                return true;
-            }
-            return !preg_match(
-                '/^(NOTA|FECHA DE ENTREGA|FECHA DE REALIZACION|TIEMPO DE DEDICACION|FECHA DE APERTURA|PRIMER INTENTO APROBADO)\s+ACTIVIDAD\s+\d+$/iu',
-                $columnname
-            );
-        }
-
-        $isautogeneratedstat = preg_match(
-            '/^(quiz:\d+:(completiondate|score|dedicationtime|opendate|firstpassattempt)|assign:\d+:(score|submissiondate))$/',
-            $formdata->stat
-        );
-        if ($isautogeneratedstat) {
+        $stat = isset($formdata->stat) ? trim((string)$formdata->stat) : '';
+        if ($stat !== '' && preg_match(
+            '/^(quiz:\d+:(completiondate|score|dedicationtime|opendate|firstpassattempt)|assign:\d+:(score|submissiondate|gradedate|grader|feedback)|forum:\d+:(posts|firstpost|lastpost)|chat:\d+:(messages|firstmessage|lastmessage)|scorm:\d+:(completiondate|score|scocompleted|dedicationtime|lastaccess))$/',
+            $stat
+        )) {
             return false;
         }
 
-        $columnname = isset($formdata->columname) ? trim((string)$formdata->columname) : '';
-        if ($columnname === '') {
-            return true;
+        $name = isset($formdata->columname) ? trim((string)$formdata->columname) : '';
+        if ($name !== '' && preg_match(
+            '/^(NOTA|PUNTUACION|FECHA DE ENTREGA|FECHA DE CORRECCION|USUARIO QUE HA CORREGIDO|FEEDBACK EN LA ENTREGA|FECHA DE REALIZACION|TIEMPO DE DEDICACION|FECHA DE APERTURA|PRIMER INTENTO APROBADO|NUMERO POSTS FORO|FECHA PRIMER POST FORO|FECHA ULTIMO POST FORO|NUMERO MENSAJES CHAT|PRIMERA FECHA HORA CHAT|ULTIMA FECHA HORA CHAT|FECHA FINALIZACION SCORM|PUNTUACION SCORM|SCO COMPLETADOS SCORM|TIEMPO DEDICACION SCORM|ULTIMO ACCESO SCORM)\s+ACTIVIDAD\s+\d+$/iu',
+            $name
+        )) {
+            return false;
         }
 
-        return !preg_match(
-            '/^(NOTA|FECHA DE ENTREGA|FECHA DE REALIZACION|TIEMPO DE DEDICACION|FECHA DE APERTURA|PRIMER INTENTO APROBADO)\s+ACTIVIDAD\s+\d+$/iu',
-            $columnname
-        );
+        return true;
     }));
 
     $pluginclass = new plugin_scormadvancedgrades($report);
@@ -440,27 +800,46 @@ function scormadvancedgrades_addmultiple_save_columns(
         }
     }
 
-    $activityindex = 1;
-    foreach ($instanceids as $instanceid) {
-        $instanceid = (int)$instanceid;
-        if ($instanceid <= 0) {
+    foreach ($modulepayloads as $modname => $payload) {
+        $instanceids = $payload['instanceids'] ?? [];
+        $metrics = $payload['metrics'] ?? [];
+        $metricoptions = $payload['metricoptions'] ?? [];
+        if (
+            !in_array($modname, ['quiz', 'assign', 'forum', 'chat', 'scorm'], true) ||
+            !is_array($instanceids) ||
+            !is_array($metrics) ||
+            !is_array($metricoptions) ||
+            empty($instanceids) ||
+            empty($metrics)
+        ) {
             continue;
         }
 
-        foreach ($metrics as $metrickey) {
-            $metricdata = $metricoptions[$metrickey];
-            $formdata = (object)[
-                'columname' => (string)$metricdata['columnprefix'] . ' ' . $activityindex,
-                'stat' => 'quiz:' . $instanceid . ':' . $metrickey,
-                'format' => (string)$metricdata['format'],
-                'align' => 'center',
-                'size' => '',
-                'wrap' => '',
-            ];
-            $elements[] = scormadvancedgrades_addmultiple_build_element($pluginclass, $formdata, $usedids);
-        }
+        $activityindex = 1;
+        foreach ($instanceids as $instanceid) {
+            $instanceid = (int)$instanceid;
+            if ($instanceid <= 0) {
+                continue;
+            }
 
-        $activityindex++;
+            foreach ($metrics as $metrickey) {
+                if (!isset($metricoptions[$metrickey])) {
+                    continue;
+                }
+                $metricdata = $metricoptions[$metrickey];
+                $formdata = (object)[
+                    'columname' => (string)$metricdata['columnprefix'] . ' ' . $activityindex,
+                    'stat' => $modname . ':' . $instanceid . ':' . $metrickey,
+                    'format' => (string)$metricdata['format'],
+                    'align' => 'center',
+                    'size' => '',
+                    'wrap' => '',
+                ];
+                $elements[] = scormadvancedgrades_addmultiple_build_element($pluginclass, $formdata, $usedids);
+            }
+
+            $activityindex++;
+        }
     }
 
     $components['columns']['elements'] = $elements;

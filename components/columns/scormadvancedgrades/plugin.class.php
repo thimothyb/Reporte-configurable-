@@ -258,6 +258,10 @@ class plugin_scormadvancedgrades extends plugin_base {
                     $options['scorm:' . $instanceid . ':score'] = 'Puntuación SCORM "' . $activityname . '"';
                     $options['scorm:' . $instanceid . ':progress'] = 'Progreso SCORM "' . $activityname . '"';
                     $options['scorm:' . $instanceid . ':status'] = 'Estado SCORM "' . $activityname . '"';
+                    $options['scorm:' . $instanceid . ':completiondate'] = 'Fecha de finalización SCORM "' . $activityname . '"';
+                    $options['scorm:' . $instanceid . ':scocompleted'] = 'Objetos SCO completados SCORM "' . $activityname . '"';
+                    $options['scorm:' . $instanceid . ':dedicationtime'] = 'Tiempo de dedicación SCORM "' . $activityname . '"';
+                    $options['scorm:' . $instanceid . ':lastaccess'] = 'Último acceso SCORM "' . $activityname . '"';
                     break;
                 case 'customcert':
                 case 'certificate':
@@ -1080,6 +1084,93 @@ class plugin_scormadvancedgrades extends plugin_base {
      * @return array{value:mixed,type:string}
      */
     protected function execute_scorm_metric(int $userid, int $scormid, string $metric): array {
+        global $DB;
+
+        static $tracktableexists = null;
+        if ($tracktableexists === null) {
+            $tracktableexists = $DB->get_manager()->table_exists('scorm_scoes_track');
+        }
+        if (!$tracktableexists) {
+            return ['value' => null, 'type' => self::TYPE_TEXT];
+        }
+
+        if ($metric === 'lastaccess') {
+            $ts = $DB->get_field_sql(
+                "SELECT MAX(st.timemodified) FROM {scorm_scoes_track} st
+                  WHERE st.userid = :userid AND st.scormid = :scormid",
+                ['userid' => $userid, 'scormid' => $scormid]
+            );
+            return ['value' => $ts ? (int)$ts : null, 'type' => self::TYPE_DATETIME];
+        }
+
+        if ($metric === 'completiondate') {
+            $attempt = $this->get_scorm_max_attempt($userid, $scormid);
+            if ($attempt === null) {
+                return ['value' => null, 'type' => self::TYPE_DATETIME];
+            }
+            $ts = $DB->get_field_sql(
+                "SELECT MAX(st.timemodified)
+                   FROM {scorm_scoes_track} st
+                  WHERE st.userid = :userid
+                    AND st.scormid = :scormid
+                    AND st.attempt = :attempt
+                    AND (st.element = :elcomp OR st.element = :elcomp2)
+                    AND (st.value = :valcomp OR st.value = :valcomp2)",
+                ['userid' => $userid, 'scormid' => $scormid, 'attempt' => $attempt,
+                 'elcomp' => 'cmi.completion_status', 'elcomp2' => 'cmi.core.lesson_status',
+                 'valcomp' => 'completed', 'valcomp2' => 'passed']
+            );
+            return ['value' => $ts ? (int)$ts : null, 'type' => self::TYPE_DATETIME];
+        }
+
+        if ($metric === 'scocompleted') {
+            $attempt = $this->get_scorm_max_attempt($userid, $scormid);
+            if ($attempt === null) {
+                return ['value' => 0, 'type' => self::TYPE_NUMBER];
+            }
+            $count = $DB->get_field_sql(
+                "SELECT COUNT(DISTINCT st.scoid)
+                   FROM {scorm_scoes_track} st
+                  WHERE st.userid = :userid
+                    AND st.scormid = :scormid
+                    AND st.attempt = :attempt
+                    AND (st.element = :elsc OR st.element = :elsc2)
+                    AND (st.value = :valsc OR st.value = :valsc2)",
+                ['userid' => $userid, 'scormid' => $scormid, 'attempt' => $attempt,
+                 'elsc' => 'cmi.completion_status', 'elsc2' => 'cmi.core.lesson_status',
+                 'valsc' => 'completed', 'valsc2' => 'passed']
+            );
+            return ['value' => (int)$count, 'type' => self::TYPE_NUMBER];
+        }
+
+        if ($metric === 'dedicationtime') {
+            $attempt = $this->get_scorm_max_attempt($userid, $scormid);
+            if ($attempt === null) {
+                return ['value' => null, 'type' => self::TYPE_TEXT];
+            }
+            $timerows = $DB->get_records_sql(
+                "SELECT st.id, st.value
+                   FROM {scorm_scoes_track} st
+                  WHERE st.userid = :userid
+                    AND st.scormid = :scormid
+                    AND st.attempt = :attempt
+                    AND (st.element = :eldt OR st.element = :eldt2)",
+                ['userid' => $userid, 'scormid' => $scormid, 'attempt' => $attempt,
+                 'eldt' => 'cmi.core.total_time', 'eldt2' => 'cmi.total_time']
+            );
+            $totalseconds = 0;
+            foreach ($timerows as $row) {
+                $totalseconds += $this->parse_scorm_time_to_seconds((string)$row->value);
+            }
+            if ($totalseconds === 0) {
+                return ['value' => null, 'type' => self::TYPE_TEXT];
+            }
+            $h = (int)floor($totalseconds / 3600);
+            $m = (int)floor(($totalseconds % 3600) / 60);
+            $s = (int)($totalseconds % 60);
+            return ['value' => sprintf('%02d:%02d:%02d', $h, $m, $s), 'type' => self::TYPE_TEXT];
+        }
+
         $trackvalues = $this->get_latest_scorm_track_values($userid, $scormid);
         if (empty($trackvalues)) {
             return ['value' => null, 'type' => self::TYPE_PERCENT];
@@ -1546,12 +1637,17 @@ class plugin_scormadvancedgrades extends plugin_base {
     protected function execute_chat_metric(int $userid, int $chatid, string $metric): array {
         global $DB;
 
-        $sql = "SELECT COUNT(id) AS totalmessages,
-                       MIN(timestamp) AS firstmessage,
-                       MAX(timestamp) AS lastmessage
-                  FROM {chat_messages}
-                 WHERE chatid = :chatid
-                   AND userid = :userid";
+        if ($chatid <= 0) {
+            return ['value' => null, 'type' => self::TYPE_TEXT];
+        }
+
+        $sql = "SELECT COUNT(cm.id) AS totalmessages,
+                       MIN(cm.timestamp) AS firstmessage,
+                       MAX(cm.timestamp) AS lastmessage
+                  FROM {chat_messages} cm
+                 WHERE cm.chatid = :chatid
+                   AND cm.userid = :userid
+                   AND cm.issystem = 0";
         $stats = $DB->get_record_sql($sql, ['chatid' => $chatid, 'userid' => $userid]);
         if (empty($stats)) {
             return ['value' => null, 'type' => self::TYPE_TEXT];
@@ -1648,6 +1744,47 @@ class plugin_scormadvancedgrades extends plugin_base {
     }
 
     /**
+     * Returns the max attempt number for a user/scorm pair, or null if none.
+     *
+     * @param int $userid
+     * @param int $scormid
+     * @return int|null
+     */
+    protected function get_scorm_max_attempt(int $userid, int $scormid): ?int {
+        global $DB;
+        $attempt = $DB->get_field_sql(
+            "SELECT MAX(st.attempt) FROM {scorm_scoes_track} st WHERE st.userid = :userid AND st.scormid = :scormid",
+            ['userid' => $userid, 'scormid' => $scormid]
+        );
+        return ($attempt === false || $attempt === null) ? null : (int)$attempt;
+    }
+
+    /**
+     * Parses a SCORM time string (SCORM 1.2 HH:MM:SS.ss or SCORM 2004 PTxHxMxS) to integer seconds.
+     *
+     * @param string $timestr
+     * @return int
+     */
+    protected function parse_scorm_time_to_seconds(string $timestr): int {
+        $timestr = trim($timestr);
+        if ($timestr === '') {
+            return 0;
+        }
+        // SCORM 2004: PT#H#M#S
+        if (preg_match('/^PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?$/i', $timestr, $m)) {
+            $hours = isset($m[1]) && $m[1] !== '' ? (float)$m[1] : 0.0;
+            $minutes = isset($m[2]) && $m[2] !== '' ? (float)$m[2] : 0.0;
+            $seconds = isset($m[3]) && $m[3] !== '' ? (float)$m[3] : 0.0;
+            return (int)round($hours * 3600 + $minutes * 60 + $seconds);
+        }
+        // SCORM 1.2: HH:MM:SS.ss or HH:MM:SS
+        if (preg_match('/^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/', $timestr, $m)) {
+            return (int)round((float)$m[1] * 3600 + (float)$m[2] * 60 + (float)$m[3]);
+        }
+        return 0;
+    }
+
+    /**
      * Gets the latest SCORM tracking values per element.
      *
      * @param int $userid
@@ -1657,12 +1794,12 @@ class plugin_scormadvancedgrades extends plugin_base {
     protected function get_latest_scorm_track_values(int $userid, int $scormid): array {
         global $DB;
 
-        $attemptsql = "SELECT MAX(st.attempt)
-                         FROM {scorm_scoes_track} st
-                        WHERE st.userid = :userid
-                          AND st.scormid = :scormid";
-        $attempt = $DB->get_field_sql($attemptsql, ['userid' => $userid, 'scormid' => $scormid]);
-        if ($attempt === false || $attempt === null) {
+        if (!$DB->get_manager()->table_exists('scorm_scoes_track')) {
+            return [];
+        }
+
+        $attempt = $this->get_scorm_max_attempt($userid, $scormid);
+        if ($attempt === null) {
             return [];
         }
 

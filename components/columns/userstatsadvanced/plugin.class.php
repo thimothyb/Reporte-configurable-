@@ -383,9 +383,42 @@ class plugin_userstatsadvanced extends plugin_base {
                     $scope
                 );
 
+            case 'informe_pdf':
+            case 'informe_detallado':
+            case 'imprimir_informe':
+            case 'imprimir_informe_detallado':
+                return $this->render_pdf_download_button($courseid, $userid);
+
             default:
                 return 'En desarrollo...';
         }
+    }
+
+    /**
+     * Renders a PDF download button for the global report of the given user.
+     * Links to export_global_pdf.php using the main report's ID ($this->report->id).
+     *
+     * @param  int    $courseid
+     * @param  int    $userid
+     * @return string HTML button, or empty string if report ID is unavailable.
+     */
+    protected function render_pdf_download_button(int $courseid, int $userid): string {
+        if (empty($this->report->id) || $courseid <= 0 || $userid <= 0) {
+            return '';
+        }
+        $pdfurl = new moodle_url('/blocks/configurable_reports/export_global_pdf.php', [
+            'id'       => (int)$this->report->id,
+            'courseid' => $courseid,
+            'userid'   => $userid,
+            'sesskey'  => sesskey(),
+        ]);
+        $label = $this->get_localized_label('userstatsadvanced_download_pdf', 'Descargar informe PDF');
+        return '<a class="btn btn-danger btn-sm" href="' . s($pdfurl->out(false)) . '"'
+            . ' title="' . s($label) . '"'
+            . ' target="_blank" rel="noopener noreferrer">'
+            . '<i class="fa fa-file-pdf-o" aria-hidden="true"></i>'
+            . ' ' . s($label)
+            . '</a>';
     }
 
     /**
@@ -795,6 +828,11 @@ class plugin_userstatsadvanced extends plugin_base {
                 return '0';
             case 'ips_utilizadas':
                 return '-';
+            case 'informe_pdf':
+            case 'informe_detallado':
+            case 'imprimir_informe':
+            case 'imprimir_informe_detallado':
+                return '';
             default:
                 return 'En desarrollo...';
         }

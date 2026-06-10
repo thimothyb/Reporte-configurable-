@@ -524,7 +524,7 @@ abstract class report_base {
             return $columns;
         }
 
-        // If the report already contains extended quiz progress metrics, keep manual configuration untouched.
+        // If the report already contains extended quiz/assignment metrics, keep manual configuration untouched.
         foreach ($columns as $column) {
             $pluginname = $column['pluginname'] ?? '';
             if (is_array($pluginname)) {
@@ -546,8 +546,14 @@ abstract class report_base {
             $columnname = isset($formdata->columname) ? trim((string)$formdata->columname) : '';
 
             if (
-                ($stat !== '' && preg_match('/^quiz:\d+:(completiondate|score|dedicationtime|opendate|firstpassattempt)$/', $stat)) ||
-                ($columnname !== '' && preg_match('/^\s*(FECHA\s+DE\s+REALIZACION|TIEMPO\s+DE\s+DEDICACION|FECHA\s+DE\s+APERTURA|PRIMER\s+INTENTO\s+APROBADO)\b/iu', $columnname))
+                ($stat !== '' && preg_match(
+                    '/^(quiz:\d+:(completiondate|score|dedicationtime|opendate|firstpassattempt)|assign:\d+:(score|submissiondate|gradedate|grader|feedback)|forum:\d+:(posts|firstpost|lastpost)|chat:\d+:(messages|firstmessage|lastmessage)|scorm:\d+:(completiondate|score|scocompleted|dedicationtime|lastaccess))$/',
+                    $stat
+                )) ||
+                ($columnname !== '' && preg_match(
+                    '/^\s*(PUNTUACION|FECHA\s+DE\s+REALIZACION|TIEMPO\s+DE\s+DEDICACION|FECHA\s+DE\s+APERTURA|PRIMER\s+INTENTO\s+APROBADO|FECHA\s+DE\s+CORRECCION|USUARIO\s+QUE\s+HA\s+CORREGIDO|FEEDBACK\s+EN\s+LA\s+ENTREGA|NUMERO\s+POSTS\s+FORO|FECHA\s+PRIMER\s+POST\s+FORO|FECHA\s+ULTIMO\s+POST\s+FORO|NUMERO\s+MENSAJES\s+CHAT|PRIMERA\s+FECHA\s+HORA\s+CHAT|ULTIMA\s+FECHA\s+HORA\s+CHAT|FECHA\s+FINALIZACION\s+SCORM|PUNTUACION\s+SCORM|SCO\s+COMPLETADOS\s+SCORM|TIEMPO\s+DEDICACION\s+SCORM|ULTIMO\s+ACCESO\s+SCORM)\b/iu',
+                    $columnname
+                ))
             ) {
                 return $columns;
             }

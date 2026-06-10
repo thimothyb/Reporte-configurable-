@@ -270,6 +270,7 @@ class userstatsadvanced_form extends moodleform {
             'matricula_activa' => $this->get_localized_label('userstatsadvanced_matricula_activa', 'Matrícula activa'),
             'scorm_completados' => $this->get_localized_label('userstatsadvanced_scorm_completados', 'SCORM completados/aprobados'),
             'tiempo_total' => $this->get_localized_label('userstatsadvanced_tiempo_total', 'Tiempo total de dedicación (formato horas)'),
+            'informe_pdf'  => $this->get_localized_label('userstatsadvanced_informe_pdf', 'Botón de descarga de informe PDF'),
         ];
 
         $mform->addElement(
