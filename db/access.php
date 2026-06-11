@@ -83,7 +83,6 @@ $capabilities = [
         'captype' => 'read',
         'contextlevel' => CONTEXT_BLOCK,
         'archetypes' => [
-            'student'        => CAP_ALLOW,
             'teacher'        => CAP_ALLOW,
             'editingteacher' => CAP_ALLOW,
             'manager'        => CAP_ALLOW,

@@ -52,26 +52,50 @@ function block_configurable_reports_extend_navigation_course(
     }
 
     require_once($CFG->dirroot . '/blocks/configurable_reports/locallib.php');
+    require_once($CFG->dirroot . '/blocks/configurable_reports/report.class.php');
 
-    $reports = $DB->get_records(
+    // Informes específicos del curso.
+    $coursereports = $DB->get_records(
         'block_configurable_reports',
         ['courseid' => $course->id, 'global' => 0],
         'name ASC'
-    );
+    ) ?: [];
 
-    if (!$reports) {
-        return;
+    // Informes globales (compartidos en todo el sitio).
+    $globalreports = $DB->get_records(
+        'block_configurable_reports',
+        ['global' => 1],
+        'name ASC'
+    ) ?: [];
+
+    $allreports = array_merge($coursereports, $globalreports);
+
+    // Si el nodo recibido es el nodo del curso (no el de reports),
+    // buscar el nodo 'coursereports' hijo para que aparezcan en la página Informes.
+    $targetnode = $parentnode->find('coursereports', navigation_node::TYPE_CONTAINER);
+    if (!$targetnode) {
+        $targetnode = $parentnode;
     }
 
-    foreach ($reports as $report) {
-        if (!$report->visible || !cr_check_report_permissions($report, $USER->id, $context)) {
+    foreach ($allreports as $report) {
+        if (!$report->visible) {
             continue;
         }
+
+        // Para informes globales, inyectar el courseid actual en el objeto.
+        if ($report->global) {
+            $report->courseid = $course->id;
+        }
+
+        if (!cr_check_report_permissions($report, $USER->id, $context)) {
+            continue;
+        }
+
         $url = new moodle_url('/blocks/configurable_reports/viewreport.php', [
             'id'       => $report->id,
             'courseid' => $course->id,
         ]);
-        $parentnode->add(
+        $targetnode->add(
             format_string($report->name),
             $url,
             navigation_node::TYPE_SETTING,

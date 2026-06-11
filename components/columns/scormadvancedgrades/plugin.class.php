@@ -263,6 +263,13 @@ class plugin_scormadvancedgrades extends plugin_base {
                     $options['scorm:' . $instanceid . ':dedicationtime'] = 'Tiempo de dedicación SCORM "' . $activityname . '"';
                     $options['scorm:' . $instanceid . ':lastaccess'] = 'Último acceso SCORM "' . $activityname . '"';
                     break;
+                case 'zoom':
+                    $options['zoom:' . $instanceid . ':duration'] = 'Duración en Zoom "' . $activityname . '"';
+                    $options['zoom:' . $instanceid . ':jointime'] = 'Hora de entrada en Zoom "' . $activityname . '"';
+                    $options['zoom:' . $instanceid . ':leavetime'] = 'Hora de salida en Zoom "' . $activityname . '"';
+                    $options['zoom:' . $instanceid . ':ip'] = 'IP en sesión Zoom "' . $activityname . '"';
+                    $options['zoom:' . $instanceid . ':durationinschedule'] = 'Duración en horario de Zoom "' . $activityname . '"';
+                    break;
                 case 'customcert':
                 case 'certificate':
                 case 'simplecertificate':
@@ -377,6 +384,8 @@ class plugin_scormadvancedgrades extends plugin_base {
                 return $this->execute_forum_metric($userid, $instanceid, $metric);
             case 'chat':
                 return $this->execute_chat_metric($userid, $instanceid, $metric);
+            case 'zoom':
+                return $this->execute_zoom_metric($userid, $instanceid, $metric);
             case 'customcert':
             case 'certificate':
             case 'simplecertificate':
@@ -1661,6 +1670,123 @@ class plugin_scormadvancedgrades extends plugin_base {
             case 'messages':
             default:
                 return ['value' => (int)$stats->totalmessages, 'type' => self::TYPE_NUMBER];
+        }
+    }
+
+    /**
+     * Executes Zoom meeting metrics for a user.
+     *
+     * @param int $userid
+     * @param int $zoomid  instance id in {zoom} table
+     * @param string $metric  duration|jointime|leavetime|ip|durationinschedule
+     * @return array{value:mixed,type:string}
+     */
+    protected function execute_zoom_metric(int $userid, int $zoomid, string $metric): array {
+        global $DB;
+
+        if ($zoomid <= 0) {
+            return ['value' => null, 'type' => self::TYPE_TEXT];
+        }
+
+        if (!$DB->get_manager()->table_exists('zoom') ||
+            !$DB->get_manager()->table_exists('zoom_meeting_details') ||
+            !$DB->get_manager()->table_exists('zoom_meeting_participants')) {
+            return ['value' => null, 'type' => self::TYPE_TEXT];
+        }
+
+        switch ($metric) {
+            case 'duration':
+                $sql = "SELECT COALESCE(SUM(zmp.duration), 0) AS totalduration
+                          FROM {zoom} z
+                          JOIN {zoom_meeting_details} zmd ON zmd.zoomid = z.id
+                          JOIN {zoom_meeting_participants} zmp ON zmp.detailsid = zmd.id
+                         WHERE z.id = :zoomid
+                           AND zmp.userid = :userid";
+                $seconds = (int)($DB->get_field_sql($sql, ['zoomid' => $zoomid, 'userid' => $userid]) ?? 0);
+                if ($seconds <= 0) {
+                    return ['value' => null, 'type' => self::TYPE_TEXT];
+                }
+                return ['value' => sprintf('%02d:%02d:%02d', floor($seconds / 3600), floor(($seconds % 3600) / 60), $seconds % 60), 'type' => self::TYPE_TEXT];
+
+            case 'jointime':
+                $sql = "SELECT MIN(zmp.join_time) AS firstjoin
+                          FROM {zoom} z
+                          JOIN {zoom_meeting_details} zmd ON zmd.zoomid = z.id
+                          JOIN {zoom_meeting_participants} zmp ON zmp.detailsid = zmd.id
+                         WHERE z.id = :zoomid
+                           AND zmp.userid = :userid";
+                $result = $DB->get_field_sql($sql, ['zoomid' => $zoomid, 'userid' => $userid]);
+                return ['value' => !empty($result) ? (int)$result : null, 'type' => self::TYPE_DATETIME];
+
+            case 'leavetime':
+                $sql = "SELECT MAX(zmp.leave_time) AS lastleave
+                          FROM {zoom} z
+                          JOIN {zoom_meeting_details} zmd ON zmd.zoomid = z.id
+                          JOIN {zoom_meeting_participants} zmp ON zmp.detailsid = zmd.id
+                         WHERE z.id = :zoomid
+                           AND zmp.userid = :userid";
+                $result = $DB->get_field_sql($sql, ['zoomid' => $zoomid, 'userid' => $userid]);
+                return ['value' => !empty($result) ? (int)$result : null, 'type' => self::TYPE_DATETIME];
+
+            case 'ip':
+                $zmpcolumns = $DB->get_columns('zoom_meeting_participants');
+                $ipcolumn = null;
+                foreach (['ip_address', 'ip'] as $candidate) {
+                    if (isset($zmpcolumns[$candidate])) {
+                        $ipcolumn = $candidate;
+                        break;
+                    }
+                }
+                if ($ipcolumn === null) {
+                    return ['value' => null, 'type' => self::TYPE_TEXT];
+                }
+                $sql = "SELECT zmp.{$ipcolumn}
+                          FROM {zoom} z
+                          JOIN {zoom_meeting_details} zmd ON zmd.zoomid = z.id
+                          JOIN {zoom_meeting_participants} zmp ON zmp.detailsid = zmd.id
+                         WHERE z.id = :zoomid
+                           AND zmp.userid = :userid
+                      ORDER BY zmp.join_time DESC";
+                $result = $DB->get_field_sql($sql, ['zoomid' => $zoomid, 'userid' => $userid], IGNORE_MULTIPLE);
+                return ['value' => !empty($result) ? (string)$result : null, 'type' => self::TYPE_TEXT];
+
+            case 'durationinschedule':
+                $sql = "SELECT zmd.start_time,
+                               zmd.duration AS scheduledduration,
+                               zmp.join_time,
+                               zmp.leave_time,
+                               zmp.duration AS participantduration
+                          FROM {zoom} z
+                          JOIN {zoom_meeting_details} zmd ON zmd.zoomid = z.id
+                          JOIN {zoom_meeting_participants} zmp ON zmp.detailsid = zmd.id
+                         WHERE z.id = :zoomid
+                           AND zmp.userid = :userid";
+                $records = $DB->get_records_sql($sql, ['zoomid' => $zoomid, 'userid' => $userid]);
+                if (empty($records)) {
+                    return ['value' => null, 'type' => self::TYPE_TEXT];
+                }
+                $totalseconds = 0;
+                foreach ($records as $record) {
+                    $schedstart = (int)$record->start_time;
+                    $schedend = $schedstart + ((int)$record->scheduledduration * 60);
+                    $jointime = (int)$record->join_time;
+                    $leavetime = (int)$record->leave_time;
+                    if ($leavetime <= 0) {
+                        $leavetime = $jointime + (int)$record->participantduration;
+                    }
+                    $overlapstart = max($jointime, $schedstart);
+                    $overlapend = min($leavetime, $schedend);
+                    if ($overlapend > $overlapstart) {
+                        $totalseconds += $overlapend - $overlapstart;
+                    }
+                }
+                if ($totalseconds <= 0) {
+                    return ['value' => null, 'type' => self::TYPE_TEXT];
+                }
+                return ['value' => sprintf('%02d:%02d:%02d', floor($totalseconds / 3600), floor(($totalseconds % 3600) / 60), $totalseconds % 60), 'type' => self::TYPE_TEXT];
+
+            default:
+                return ['value' => null, 'type' => self::TYPE_TEXT];
         }
     }
 

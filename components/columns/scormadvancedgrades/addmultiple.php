@@ -64,29 +64,34 @@ $assignmetricoptions = scormadvancedgrades_addmultiple_get_assign_metric_options
 $forummetricoptions = scormadvancedgrades_addmultiple_get_forum_metric_options();
 $chatmetricoptions = scormadvancedgrades_addmultiple_get_chat_metric_options();
 $scormmetricoptions = scormadvancedgrades_addmultiple_get_scorm_metric_options();
+$zoommetricoptions = scormadvancedgrades_addmultiple_get_zoom_metric_options();
 
 $selectedquizmetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($quizmetricoptions, $submitted);
 $selectedassignmetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($assignmetricoptions, $submitted);
 $selectedforummetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($forummetricoptions, $submitted);
 $selectedchatmetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($chatmetricoptions, $submitted);
 $selectedscormmetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($scormmetricoptions, $submitted);
+$selectedzoommetrics = scormadvancedgrades_addmultiple_collect_selected_metrics($zoommetricoptions, $submitted);
 
 $quizactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'quiz');
 $assignactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'assign');
 $forumactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'forum');
 $chatactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'chat');
 $scormactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'scorm');
+$zoomactivities = scormadvancedgrades_addmultiple_get_module_activities((int)$course->id, 'zoom');
 
 $selectedquizinstanceids = optional_param_array('quizinstance', [], PARAM_INT);
 $selectedassigninstanceids = optional_param_array('assigninstance', [], PARAM_INT);
 $selectedforuminstanceids = optional_param_array('foruminstance', [], PARAM_INT);
 $selectedchatinstanceids = optional_param_array('chatinstance', [], PARAM_INT);
 $selectedscorminstanceids = optional_param_array('scorminstance', [], PARAM_INT);
+$selectedzoominstanceids = optional_param_array('zoominstance', [], PARAM_INT);
 $selectedquizinstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedquizinstanceids);
 $selectedassigninstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedassigninstanceids);
 $selectedforuminstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedforuminstanceids);
 $selectedchatinstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedchatinstanceids);
 $selectedscorminstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedscorminstanceids);
+$selectedzoominstanceids = scormadvancedgrades_addmultiple_normalize_int_list($selectedzoominstanceids);
 
 if (!$submitted && empty($selectedquizinstanceids)) {
     $selectedquizinstanceids = array_map(static function($activity): int {
@@ -113,6 +118,11 @@ if (!$submitted && empty($selectedscorminstanceids)) {
         return (int)$activity->instanceid;
     }, $scormactivities);
 }
+if (!$submitted && empty($selectedzoominstanceids)) {
+    $selectedzoominstanceids = array_map(static function($activity): int {
+        return (int)$activity->instanceid;
+    }, $zoomactivities);
+}
 
 $saved = false;
 $error = '';
@@ -124,7 +134,8 @@ if ($submitted) {
     $hasforumselection = !empty($selectedforummetrics);
     $haschatselection = !empty($selectedchatmetrics);
     $hasscormselection = !empty($selectedscormmetrics);
-    if (!$hasquizselection && !$hasassignselection && !$hasforumselection && !$haschatselection && !$hasscormselection) {
+    $haszoomselection = !empty($selectedzoommetrics);
+    if (!$hasquizselection && !$hasassignselection && !$hasforumselection && !$haschatselection && !$hasscormselection && !$haszoomselection) {
         $error = scormadvancedgrades_addmultiple_label(
             'scormadvancedgrades_addmultiple_nometrics',
             'Debes seleccionar al menos una opcion de columnas.'
@@ -154,6 +165,11 @@ if ($submitted) {
             'scormadvancedgrades_addmultiple_noselection_scorm',
             'Debes seleccionar al menos un SCORM.'
         );
+    } else if ($haszoomselection && empty($selectedzoominstanceids)) {
+        $error = scormadvancedgrades_addmultiple_label(
+            'scormadvancedgrades_addmultiple_noselection_zoom',
+            'Debes seleccionar al menos una sesión Zoom.'
+        );
     } else {
         scormadvancedgrades_addmultiple_save_columns(
             $report,
@@ -182,6 +198,11 @@ if ($submitted) {
                     'instanceids' => $selectedscorminstanceids,
                     'metrics' => $selectedscormmetrics,
                     'metricoptions' => $scormmetricoptions,
+                ],
+                'zoom' => [
+                    'instanceids' => $selectedzoominstanceids,
+                    'metrics' => $selectedzoommetrics,
+                    'metricoptions' => $zoommetricoptions,
                 ],
             ]
         );
@@ -223,7 +244,7 @@ if ($error !== '') {
     echo $OUTPUT->notification($error, 'notifyproblem');
 }
 
-if (empty($quizactivities) && empty($assignactivities) && empty($forumactivities) && empty($chatactivities) && empty($scormactivities)) {
+if (empty($quizactivities) && empty($assignactivities) && empty($forumactivities) && empty($chatactivities) && empty($scormactivities) && empty($zoomactivities)) {
     echo $OUTPUT->notification(get_string('norecordsfound', 'block_configurable_reports'), 'notifyinfo');
     echo $OUTPUT->footer();
     exit;
@@ -280,6 +301,14 @@ scormadvancedgrades_addmultiple_render_module_block(
     $selectedscormmetrics,
     $scormactivities,
     $selectedscorminstanceids
+);
+scormadvancedgrades_addmultiple_render_module_block(
+    'zoom',
+    scormadvancedgrades_addmultiple_label('scormadvancedgrades_addmultiple_zoomsection', 'Zoom'),
+    $zoommetricoptions,
+    $selectedzoommetrics,
+    $zoomactivities,
+    $selectedzoominstanceids
 );
 
 echo html_writer::start_div('mt-3');
@@ -548,6 +577,56 @@ function scormadvancedgrades_addmultiple_get_forum_metric_options(): array {
 }
 
 /**
+ * Returns metric options for Zoom module.
+ *
+ * @return array<string,array<string,mixed>>
+ */
+function scormadvancedgrades_addmultiple_get_zoom_metric_options(): array {
+    return [
+        'duration' => [
+            'param' => 'addzoomduration',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addzoomduration',
+            'fallback' => 'Añadir duración de las sesiones Zoom',
+            'default' => 0,
+            'columnprefix' => 'DURACION ZOOM ACTIVIDAD',
+            'format' => 'text',
+        ],
+        'jointime' => [
+            'param' => 'addzoomjointime',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addzoomjointime',
+            'fallback' => 'Añadir hora de entrada a las sesiones Zoom',
+            'default' => 0,
+            'columnprefix' => 'HORA ENTRADA ZOOM ACTIVIDAD',
+            'format' => 'datetime',
+        ],
+        'leavetime' => [
+            'param' => 'addzoomleavetime',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addzoomleavetime',
+            'fallback' => 'Añadir hora de salida a las sesiones Zoom',
+            'default' => 0,
+            'columnprefix' => 'HORA SALIDA ZOOM ACTIVIDAD',
+            'format' => 'datetime',
+        ],
+        'ip' => [
+            'param' => 'addzoomip',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addzoomip',
+            'fallback' => 'Añadir IP al conectar a las sesiones Zoom',
+            'default' => 0,
+            'columnprefix' => 'IP ZOOM ACTIVIDAD',
+            'format' => 'text',
+        ],
+        'durationinschedule' => [
+            'param' => 'addzoomdurationinschedule',
+            'labelkey' => 'scormadvancedgrades_addmultiple_addzoomdurationinschedule',
+            'fallback' => 'Agregar duración de las sesiones de Zoom dentro de los tiempos de programación de sesiones',
+            'default' => 0,
+            'columnprefix' => 'DURACION HORARIO ZOOM ACTIVIDAD',
+            'format' => 'text',
+        ],
+    ];
+}
+
+/**
  * Collects selected metrics from request.
  *
  * @param array<string,array<string,mixed>> $metricoptions
@@ -720,6 +799,7 @@ function scormadvancedgrades_addmultiple_get_module_activities(int $courseid, st
         'forum' => 'forum',
         'chat' => 'chat',
         'scorm' => 'scorm',
+        'zoom' => 'zoom',
     ];
     if ($courseid <= 0 || !isset($modtotable[$modname])) {
         return [];
@@ -775,7 +855,7 @@ function scormadvancedgrades_addmultiple_save_columns(object $report, array $mod
 
         $stat = isset($formdata->stat) ? trim((string)$formdata->stat) : '';
         if ($stat !== '' && preg_match(
-            '/^(quiz:\d+:(completiondate|score|dedicationtime|opendate|firstpassattempt)|assign:\d+:(score|submissiondate|gradedate|grader|feedback)|forum:\d+:(posts|firstpost|lastpost)|chat:\d+:(messages|firstmessage|lastmessage)|scorm:\d+:(completiondate|score|scocompleted|dedicationtime|lastaccess))$/',
+            '/^(quiz:\d+:(completiondate|score|dedicationtime|opendate|firstpassattempt)|assign:\d+:(score|submissiondate|gradedate|grader|feedback)|forum:\d+:(posts|firstpost|lastpost)|chat:\d+:(messages|firstmessage|lastmessage)|scorm:\d+:(completiondate|score|scocompleted|dedicationtime|lastaccess)|zoom:\d+:(duration|jointime|leavetime|ip|durationinschedule))$/',
             $stat
         )) {
             return false;
@@ -783,7 +863,7 @@ function scormadvancedgrades_addmultiple_save_columns(object $report, array $mod
 
         $name = isset($formdata->columname) ? trim((string)$formdata->columname) : '';
         if ($name !== '' && preg_match(
-            '/^(NOTA|PUNTUACION|FECHA DE ENTREGA|FECHA DE CORRECCION|USUARIO QUE HA CORREGIDO|FEEDBACK EN LA ENTREGA|FECHA DE REALIZACION|TIEMPO DE DEDICACION|FECHA DE APERTURA|PRIMER INTENTO APROBADO|NUMERO POSTS FORO|FECHA PRIMER POST FORO|FECHA ULTIMO POST FORO|NUMERO MENSAJES CHAT|PRIMERA FECHA HORA CHAT|ULTIMA FECHA HORA CHAT|FECHA FINALIZACION SCORM|PUNTUACION SCORM|SCO COMPLETADOS SCORM|TIEMPO DEDICACION SCORM|ULTIMO ACCESO SCORM)\s+ACTIVIDAD\s+\d+$/iu',
+            '/^(NOTA|PUNTUACION|FECHA DE ENTREGA|FECHA DE CORRECCION|USUARIO QUE HA CORREGIDO|FEEDBACK EN LA ENTREGA|FECHA DE REALIZACION|TIEMPO DE DEDICACION|FECHA DE APERTURA|PRIMER INTENTO APROBADO|NUMERO POSTS FORO|FECHA PRIMER POST FORO|FECHA ULTIMO POST FORO|NUMERO MENSAJES CHAT|PRIMERA FECHA HORA CHAT|ULTIMA FECHA HORA CHAT|FECHA FINALIZACION SCORM|PUNTUACION SCORM|SCO COMPLETADOS SCORM|TIEMPO DEDICACION SCORM|ULTIMO ACCESO SCORM|DURACION ZOOM|HORA ENTRADA ZOOM|HORA SALIDA ZOOM|IP ZOOM|DURACION HORARIO ZOOM)\s+ACTIVIDAD\s+\d+$/iu',
             $name
         )) {
             return false;
@@ -805,7 +885,7 @@ function scormadvancedgrades_addmultiple_save_columns(object $report, array $mod
         $metrics = $payload['metrics'] ?? [];
         $metricoptions = $payload['metricoptions'] ?? [];
         if (
-            !in_array($modname, ['quiz', 'assign', 'forum', 'chat', 'scorm'], true) ||
+            !in_array($modname, ['quiz', 'assign', 'forum', 'chat', 'scorm', 'zoom'], true) ||
             !is_array($instanceids) ||
             !is_array($metrics) ||
             !is_array($metricoptions) ||
