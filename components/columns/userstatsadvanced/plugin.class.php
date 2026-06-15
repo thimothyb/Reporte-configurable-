@@ -217,7 +217,7 @@ class plugin_userstatsadvanced extends plugin_base {
 
             case 'contenidos_visualizados':
                 $selectedcmids = $this->parse_selected_cmids($selectedcmidsraw);
-                return $this->get_logged_content_progress($userid, $courseid, $selectedcmids);
+                return $this->get_logged_content_progress($userid, $courseid, $selectedcmids, $starttime, $endtime);
 
             case 'recursos_completados':
                 $selectedcmids = $this->parse_selected_cmids($selectedcmidsraw);
@@ -1926,16 +1926,22 @@ class plugin_userstatsadvanced extends plugin_base {
      * @param array<int> $selectedcmids
      * @return string
      */
-    protected function get_logged_content_progress(int $userid, int $courseid, array $selectedcmids = []): string {
+    protected function get_logged_content_progress(
+        int $userid,
+        int $courseid,
+        array $selectedcmids = [],
+        int $starttime = 0,
+        int $endtime = 0
+    ): string {
         $total = $this->get_total_viewable_course_modules($courseid, $selectedcmids);
         if ($total <= 0) {
             return '0 / 0 (0.00%)';
         }
 
-        $viewed = $this->get_viewed_course_modules_by_logs($userid, $courseid, true, $selectedcmids);
+        $viewed = $this->get_viewed_course_modules_by_logs($userid, $courseid, true, $selectedcmids, $starttime, $endtime);
         if ($viewed <= 0) {
             // Fallback for modules/events where read/view actions are not recorded consistently.
-            $viewed = $this->get_viewed_course_modules_by_logs($userid, $courseid, false, $selectedcmids);
+            $viewed = $this->get_viewed_course_modules_by_logs($userid, $courseid, false, $selectedcmids, $starttime, $endtime);
         }
 
         if ($viewed > $total) {
@@ -2046,7 +2052,9 @@ class plugin_userstatsadvanced extends plugin_base {
         int $userid,
         int $courseid,
         bool $strictreadonly = true,
-        array $selectedcmids = []
+        array $selectedcmids = [],
+        int $starttime = 0,
+        int $endtime = 0
     ): int {
         global $DB;
 
@@ -2072,6 +2080,16 @@ class plugin_userstatsadvanced extends plugin_base {
             $params = array_merge($params, $inparams);
         }
 
+        $timewhere = '';
+        if ($starttime > 0) {
+            $timewhere .= " AND l.timecreated >= :cvstarttime";
+            $params['cvstarttime'] = $starttime;
+        }
+        if ($endtime > 0) {
+            $timewhere .= " AND l.timecreated <= :cvendtime";
+            $params['cvendtime'] = $endtime;
+        }
+
         $sql = "SELECT COUNT(DISTINCT cm.id)
                   FROM {logstore_standard_log} l
                   JOIN {course_modules} cm
@@ -2082,7 +2100,7 @@ class plugin_userstatsadvanced extends plugin_base {
                    AND l.courseid = :logcourseid
                    AND l.contextlevel = :contextmodule
                    AND cm.visible = 1
-                   AND m.name <> :labelmodname" . $strictwhere . $selectedwhere;
+                   AND m.name <> :labelmodname" . $strictwhere . $selectedwhere . $timewhere;
         $viewed = $DB->get_field_sql($sql, $params);
 
         return ($viewed !== false && $viewed !== null) ? (int)$viewed : 0;

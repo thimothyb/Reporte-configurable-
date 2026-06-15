@@ -248,7 +248,7 @@ class userstatsadvanced_form extends moodleform {
                 'Cuestionarios completados / Total (criterio de finalización Moodle)'
             ),
             'intentos_cuestionario' => $this->get_localized_label('userstatsadvanced_intentos_cuestionario', 'Intentos de cuestionario (completados / total)'),
-            'contenidos_visualizados' => $this->get_localized_label('userstatsadvanced_contenidos_visualizados', 'Contenidos visualizados (progreso global)'),
+            'contenidos_visualizados' => $this->get_localized_label('userstatsadvanced_contenidos_visualizados', 'Recursos visitados / total'),
             'recursos_completados' => $this->get_localized_label('userstatsadvanced_recursos_completados', 'Recursos completados / Total'),
             'finalizacion_cruzada' => $this->get_localized_label('userstatsadvanced_finalizacion_cruzada', 'Finalización cruzada (progreso global)'),
             'correos' => $this->get_localized_label('userstatsadvanced_correos', 'Correos (interacción con docentes)'),
@@ -349,7 +349,8 @@ class userstatsadvanced_form extends moodleform {
             "    popupbase = " . $popupurlassignjson . ";\n" .
             "  }\n" .
             "  var popupurl = popupbase + '&selectedcmids=' + encodeURIComponent(selected);\n" .
-            "  window.open(popupurl, 'userstatsadvanced_selectmodules', 'width=1150,height=750,scrollbars=yes,resizable=yes');\n" .
+            "  var popup = window.open(popupurl, 'userstatsadvanced_selectmodules', 'width=1150,height=750,scrollbars=yes,resizable=yes');\n" .
+            "  if (popup) { popup.focus(); }\n" .
             "})(); return false;";
         $mform->addElement(
             'button',
@@ -448,6 +449,7 @@ class userstatsadvanced_form extends moodleform {
         $selectresourceslabeljson = json_encode($selectresourceslabel);
         $selectquizzeslabeljson = json_encode($selectquizzeslabel);
         $selecttaskslabeljson = json_encode($selecttaskslabel);
+        $currentcidjson = json_encode((string)($this->_customdata['cid'] ?? ''));
 
         $script = <<<JS
 (function() {
@@ -465,6 +467,7 @@ class userstatsadvanced_form extends moodleform {
     var selectResourcesLabel = $selectresourceslabeljson;
     var selectQuizzesLabel = $selectquizzeslabeljson;
     var selectTasksLabel = $selecttaskslabeljson;
+    var currentCid = $currentcidjson;
 
     function getCurrentStatType() {
         var statField = document.getElementById("id_stat_type");
@@ -611,6 +614,10 @@ class userstatsadvanced_form extends moodleform {
         }
     }
 
+    // Used only when ADDING a new column (no cid yet): the selector popup cannot persist
+    // to the DB, so it calls this on the opener to stage the selection in the form before
+    // the column is saved. When EDITING an existing column, the popup saves to the DB and
+    // reloads this page instead, so no cross-window callback is needed.
     window.crUserstatsAdvancedSetSelectedCourseModules = function(csv, labelText) {
         var hidden = document.getElementById("id_selectedcmids");
         if (hidden) {
@@ -649,7 +656,8 @@ class userstatsadvanced_form extends moodleform {
     }
 })();
 JS;
-        $mform->addElement('html', html_writer::script($script));
+        global $PAGE;
+        $PAGE->requires->js_init_code($script);
 
         $limitoptions = [];
         $limitminutes = array_merge([1, 2, 3, 4], range(5, 180, 5), range(210, 480, 30), [600, 720]);

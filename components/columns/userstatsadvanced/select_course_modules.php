@@ -144,6 +144,7 @@ foreach ($courserecords as $courserecord) {
             'name' => format_string($activityname),
             'type' => format_string($modtypename),
             'course' => $coursename,
+            'visible' => (bool)$cm->visible,
         ];
     }
 }
@@ -204,41 +205,58 @@ if ($submitselection && confirm_sesskey()) {
         }
     }
 
+    // URL of the column edit form (the opener). When editing an existing column the popup
+    // reloads the opener to this URL so it re-renders the freshly-saved selection from the DB.
+    $fallbackurljson = 'null';
+    if ($cid !== '') {
+        $editpluginurlparams = ['id' => $id, 'comp' => 'columns', 'pname' => 'userstatsadvanced', 'cid' => $cid];
+        $editpluginurl = new moodle_url('/blocks/configurable_reports/editplugin.php', $editpluginurlparams);
+        $fallbackurljson = json_encode($editpluginurl->out(false));
+    }
+
     $syncscript = '(function() {' .
         'var csv = ' . json_encode($selectedcsv) . ';' .
         'var label = ' . json_encode($selectedlabel) . ';' .
-        'if (window.opener) {' .
-            'var syncFallback = function() {' .
-                'var hidden = window.opener.document.getElementById(\"id_selectedcmids\");' .
-                'if (!hidden) { hidden = window.opener.document.querySelector(\"input[name=selectedcmids]\"); }' .
-                'if (hidden) {' .
-                    'hidden.value = csv;' .
-                    'if (typeof hidden.dispatchEvent === \"function\") {' .
-                        'hidden.dispatchEvent(new Event(\"change\"));' .
-                    '}' .
-                '}' .
-                'var display = window.opener.document.getElementById(\"userstatsadvanced-selectedcmids-display\");' .
-                'if (display) { display.textContent = label; }' .
-            '};' .
-            'if (typeof window.opener.crUserstatsAdvancedSetSelectedCourseModules === "function") {' .
-                'try {' .
-                    'window.opener.crUserstatsAdvancedSetSelectedCourseModules(csv, label);' .
-                '} catch (err) {' .
-                    'syncFallback();' .
-                '}' .
+        'var cid = ' . json_encode($cid) . ';' .
+        'var reloadUrl = ' . $fallbackurljson . ';' .
+        // CASE A: editing an existing column (cid set). The selection is ALREADY saved to
+        // the DB above. Just reload the opener so it re-renders from the DB. This depends
+        // only on a live, same-origin opener reference — NOT on any script having run in
+        // the opener page — so it is robust even when CSP blocks inline parent-page JS.
+        // (A fresh load of editplugin.php is exactly what a manual F5 does, which works.)
+        'if (cid !== "" && reloadUrl) {' .
+            'if (window.opener && !window.opener.closed) {' .
+                'try { window.opener.location.href = reloadUrl; } catch(e) {}' .
+                'window.close();' .
+                // If window.close() was blocked (popup opened as a tab), show the form here.
+                'setTimeout(function(){ window.location.href = reloadUrl; }, 800);' .
             '} else {' .
-                'syncFallback();' .
+                'window.location.href = reloadUrl;' .
             '}' .
+            'return;' .
+        '}' .
+        // CASE B: adding a NEW column (no cid yet). The selection cannot be persisted to the
+        // DB, so update the opener form field in place and let the user submit the column form.
+        'if (window.opener && !window.opener.closed) {' .
+            'try {' .
+                'if (typeof window.opener.crUserstatsAdvancedSetSelectedCourseModules === "function") {' .
+                    'window.opener.crUserstatsAdvancedSetSelectedCourseModules(csv, label);' .
+                '} else {' .
+                    'var h = window.opener.document.getElementById("id_selectedcmids");' .
+                    'if (!h) { h = window.opener.document.querySelector("input[name=selectedcmids]"); }' .
+                    'if (h) { h.value = csv; h.dispatchEvent(new Event("change")); }' .
+                    'var d = window.opener.document.getElementById("userstatsadvanced-selectedcmids-display");' .
+                    'if (d) { d.textContent = label; }' .
+                '}' .
+            '} catch(e) {}' .
         '}' .
         'window.close();' .
     '})();';
 
+    // Use Moodle's JS pipeline so the script gets the CSP nonce and executes correctly.
+    $PAGE->set_pagelayout('embedded');
+    $PAGE->requires->js_init_code($syncscript);
     echo $OUTPUT->header();
-    echo html_writer::script($syncscript);
-    echo html_writer::div(
-        userstatsadvanced_popup_label('userstatsadvanced_selection_saved', 'Selección guardada. Puedes cerrar esta ventana.'),
-        'alert alert-info'
-    );
     echo $OUTPUT->footer();
     exit;
 }
@@ -301,20 +319,35 @@ if ($showcoursecolumn) {
 }
 $table->data = [];
 
+$hiddenlabel = userstatsadvanced_popup_label('userstatsadvanced_hidden_module', 'Oculto');
 foreach ($availablecms as $cmid => $cmdata) {
+    $isvisible = !empty($cmdata['visible']);
     $checkboxattrs = [
         'type' => 'checkbox',
         'name' => 'cmids[]',
         'value' => (string)$cmid,
         'class' => 'userstatsadvanced-cmid-checkbox',
     ];
-    if (in_array((int)$cmid, $selectedcmids, true)) {
+    if (!$isvisible) {
+        $checkboxattrs['disabled'] = 'disabled';
+        $checkboxattrs['title'] = $hiddenlabel;
+    } else if (in_array((int)$cmid, $selectedcmids, true)) {
         $checkboxattrs['checked'] = 'checked';
+    }
+
+    $namehtml = s($cmdata['name']);
+    if (!$isvisible) {
+        $namehtml .= ' ' . html_writer::tag(
+            'span',
+            s($hiddenlabel),
+            ['class' => 'badge badge-secondary ml-1', 'title' => s($hiddenlabel)]
+        );
+        $namehtml = html_writer::tag('span', $namehtml, ['style' => 'color:#999;font-style:italic;']);
     }
 
     $row = [
         html_writer::empty_tag('input', $checkboxattrs),
-        s($cmdata['name']),
+        $namehtml,
         s($cmdata['type']),
     ];
     if ($showcoursecolumn) {
@@ -357,7 +390,7 @@ echo html_writer::end_tag('form');
 echo html_writer::script(
     '(function() {' .
         'function setCheckboxState(checked) {' .
-            'var boxes = document.querySelectorAll(".userstatsadvanced-cmid-checkbox");' .
+            'var boxes = document.querySelectorAll(".userstatsadvanced-cmid-checkbox:not(:disabled)");' .
             'boxes.forEach(function(box) { box.checked = checked; });' .
         '}' .
         'var selectAllBtn = document.getElementById("userstatsadvanced-select-all");' .

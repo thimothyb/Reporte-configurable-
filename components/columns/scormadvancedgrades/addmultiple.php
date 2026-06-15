@@ -223,12 +223,15 @@ if ($saved) {
     $escapedurl = json_encode($editcolumnsurl->out(false));
     echo html_writer::script(
         "(function(){\n" .
-        "  try {\n" .
-        "    if (window.opener && !window.opener.closed) {\n" .
-        "      window.opener.location = {$escapedurl};\n" .
-        "    }\n" .
-        "  } catch (e) {}\n" .
-        "  setTimeout(function(){ window.close(); }, 500);\n" .
+        "  var targetUrl = {$escapedurl};\n" .
+        "  if (window.opener && !window.opener.closed) {\n" .
+        "    try {\n" .
+        "      window.opener.location = targetUrl;\n" .
+        "    } catch (e) {}\n" .
+        "    setTimeout(function(){ window.close(); }, 500);\n" .
+        "  } else {\n" .
+        "    window.location.href = targetUrl;\n" .
+        "  }\n" .
         "})();"
     );
 
