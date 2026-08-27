@@ -172,6 +172,13 @@ class plugin_userstatsadvanced extends plugin_base {
         if (!$userid || !$courseid) {
             return $this->get_metric_default_value($stat_type);
         }
+
+        // --- Legacy bridge: try to resolve from iTOP cached data first. ---
+        $legacyvalue = \block_configurable_reports\legacy\bridge::resolve($courseid, $userid, $stat_type);
+        if ($legacyvalue !== null) {
+            return $legacyvalue;
+        }
+        // --- End legacy bridge. ---
         [$starttime, $endtime] = $this->resolve_effective_time_range($courseid, $starttime, $endtime, $userid);
         $scope = $this->resolve_access_scope_from_request();
 
@@ -2346,9 +2353,11 @@ class plugin_userstatsadvanced extends plugin_base {
     protected function count_course_mail_messages(int $userid, int $courseid): int {
         $targetids = $this->get_mail_target_user_ids($userid, $courseid);
         $directcount = $this->count_messages_by_target_user_ids($userid, $targetids);
-        $forumcount = $this->count_staff_forum_mail_messages($userid, $courseid, $targetids);
+        // Forum count removed: iTOP correos only counts direct messages.
+        return $directcount;
 
-        return $directcount + $forumcount;
+
+
     }
 
     /**

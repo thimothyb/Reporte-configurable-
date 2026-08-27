@@ -104,5 +104,22 @@ function block_configurable_reports_extend_navigation_course(
             new pix_icon('i/report', '')
         );
     }
-}
 
+    // Legacy data viewer link — show only if itop data exists for this course.
+    if (class_exists('\block_configurable_reports\legacy\detector')) {
+        $scenario = \block_configurable_reports\legacy\detector::detect($course->id);
+        if ($scenario !== \block_configurable_reports\legacy\detector::SCENARIO_OWN_PLUGIN) {
+            $legacyurl = new moodle_url('/blocks/configurable_reports/legacy_view.php', [
+                'courseid' => $course->id,
+            ]);
+            $targetnode->add(
+                get_string('legacy_nav_label', 'block_configurable_reports'),
+                $legacyurl,
+                navigation_node::TYPE_SETTING,
+                null,
+                'cr_legacy_viewer',
+                new pix_icon('i/report', '')
+            );
+        }
+    }
+}

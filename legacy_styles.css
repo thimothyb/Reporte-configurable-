@@ -1,0 +1,154 @@
+/**
+ * Styles for the legacy data viewer.
+ *
+ * @package    block_configurable_reports
+ * @subpackage legacy
+ */
+
+/* Header with scenario badge */
+.cr-legacy-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    background-color: #F0F3FC;
+    border-radius: 6px;
+    border-left: 4px solid #0ABCC9;
+}
+
+.cr-legacy-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.85em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.cr-legacy-badge.badge-frozen {
+    background-color: #003670;
+    color: #D9FBFF;
+}
+
+.cr-legacy-badge.badge-live {
+    background-color: #0ABCC9;
+    color: #012142;
+}
+
+.cr-legacy-readonly {
+    font-size: 0.85em;
+    color: #34547A;
+    font-style: italic;
+}
+
+/* Summary cards grid */
+.cr-legacy-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+    margin: 20px 0;
+}
+
+.cr-legacy-card {
+    background: #FFFFFF;
+    border: 1px solid #E2E6F2;
+    border-radius: 8px;
+    padding: 20px 16px;
+    text-align: center;
+    transition: border-color 0.2s;
+}
+
+.cr-legacy-card:hover {
+    border-color: #0ABCC9;
+}
+
+.cr-legacy-card-value {
+    font-size: 1.6em;
+    font-weight: 700;
+    color: #003670;
+    margin-bottom: 4px;
+}
+
+.cr-legacy-card-label {
+    font-size: 0.85em;
+    color: #4E7EA5;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+/* Content area */
+.cr-legacy-content {
+    margin: 16px 0;
+}
+
+/* Tables */
+.cr-legacy-table {
+    width: 100%;
+    font-size: 0.9em;
+}
+
+.cr-legacy-table th {
+    background-color: #27334F !important;
+    color: #D9FBFF !important;
+    font-weight: 600;
+    padding: 10px 12px !important;
+}
+
+.cr-legacy-table td {
+    padding: 8px 12px !important;
+    vertical-align: middle !important;
+}
+
+.cr-legacy-table tbody tr:nth-child(even) {
+    background-color: #F0F3FC;
+}
+
+.cr-legacy-table tbody tr:hover {
+    background-color: #E2E6F2;
+}
+
+/* Export section */
+.cr-legacy-export {
+    margin-top: 24px;
+    padding: 16px;
+    background-color: #F0F3FC;
+    border-radius: 6px;
+}
+
+.cr-legacy-export h4 {
+    margin-bottom: 12px;
+    color: #27334F;
+    font-size: 1em;
+}
+
+.cr-legacy-export .btn-outline-secondary {
+    border-color: #0ABCC9;
+    color: #003670;
+}
+
+.cr-legacy-export .btn-outline-secondary:hover {
+    background-color: #0ABCC9;
+    color: #FFFFFF;
+    border-color: #0ABCC9;
+}
+
+/* Cache notice */
+.cr-report-cache-notice {
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    background-color: #D9FBFF;
+    border: 1px solid #0FCED3;
+    border-radius: 4px;
+    color: #012142;
+}
+
+.cr-report-cache-success {
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    background-color: #d4edda;
+    border: 1px solid #c3e6cb;
+    border-radius: 4px;
+    color: #155724;
+}
